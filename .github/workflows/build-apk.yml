@@ -19,6 +19,16 @@ jobs:
           cp -R /tmp/atvr4samsung/src/atvr4samsung/companion/protocol app/src/main/python/atvr4samsung/companion/
           touch app/src/main/python/atvr4samsung/__init__.py
           touch app/src/main/python/atvr4samsung/companion/__init__.py
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('app/src/main/python/atvr4samsung/companion/protocol/chacha20.py')
+          text = path.read_text()
+          text = text.replace(
+              'from chacha20poly1305_reuseable import ChaCha20Poly1305Reusable as ChaCha20Poly1305',
+              'from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305'
+          )
+          path.write_text(text)
+          PY
           mkdir -p app/src/main/assets/licenses
           cp /tmp/atvr4samsung/LICENSE app/src/main/assets/licenses/atvr4samsung-LICENSE.txt
           cp /tmp/atvr4samsung/src/atvr4samsung/companion/protocol/LICENSE-companion-base.md app/src/main/assets/licenses/LICENSE-companion-base.md
