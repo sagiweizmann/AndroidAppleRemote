@@ -34,9 +34,8 @@ chaquopy {
     defaultConfig {
         version = "3.11"
         pip {
-            install("cryptography>=42")
+            install("cryptography==42.0.8")
             install("srptools>=1.0")
-            install("chacha20poly1305-reuseable>=0.12")
         }
     }
 }
