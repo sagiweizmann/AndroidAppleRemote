@@ -53,6 +53,12 @@ class AndroidPairedClients:
 class AndroidCompanionService(FakeCompanionService):
  _seq=0
  def __init__(s,state,*,name,identifier,private_key,server_generation,pairing_window,paired_clients):super().__init__(state,device_name=name,unique_id=identifier,private_key=private_key,server_identity_generation=server_generation,paired_clients=paired_clients,require_paired=True,pairing_window=pairing_window);type(s)._seq+=1;s.cid=type(s)._seq;s._android_touch_start=None;s._rx=0;s._tx=0
+ # atvr4samsung's durable identity-reset recovery fence is tied to its full Linux state layout.
+ # This Android bridge rotates identity by creating a brand-new UUID/generation/state directory,
+ # so there can be no in-progress recovery transaction to fence. Keeping the Linux check here can
+ # fail closed on our intentionally minimal state directory and reject PV M1 before iOS can see the
+ # replacement identity and fall back to Pair-Setup.
+ def _identity_reset_in_progress(s):return False
  def connection_made(s,t):trace(f"TCP #{s.cid} CONNECT • {t.get_extra_info('peername')}");return super().connection_made(t)
  def connection_lost(s,e):trace(f"TCP #{s.cid} DISCONNECT • rx={s._rx} tx={s._tx} • {e or 'peer closed'}");return super().connection_lost(e)
  def data_received(s,d):s._rx+=1;trace(f"TCP #{s.cid} RX#{s._rx} • {len(d)} bytes • encrypted={'YES'if s.chacha else'NO'}");return super().data_received(d)
