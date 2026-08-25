@@ -22,6 +22,7 @@ class CompanionBridgeService : Service() {
         private const val TAG = "CompanionBridge"
         private const val CHANNEL_ID = "bridge"
         private const val NOTIFICATION_ID = 1001
+        private const val DEVICE_NAME = "Xiaomi TV"
     }
 
     private val pythonExecutor = Executors.newSingleThreadExecutor()
@@ -32,25 +33,13 @@ class CompanionBridgeService : Service() {
     override fun onCreate() {
         super.onCreate()
         CrashReporter.install(this)
+        try { nsd = getSystemService(Context.NSD_SERVICE) as NsdManager }
+        catch (e: Throwable) { CrashReporter.save(this, "NSD INIT", e); stopSelf(); return }
 
-        try {
-            nsd = getSystemService(Context.NSD_SERVICE) as NsdManager
-        } catch (e: Throwable) {
-            CrashReporter.save(this, "NSD INIT", e)
-            stopSelf()
-            return
-        }
-
-        // Foreground mode is useful, but some Android TV 10 OEM builds are buggy here.
-        // Keep it best-effort and never let notification setup kill the service.
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 getSystemService(NotificationManager::class.java).createNotificationChannel(
-                    NotificationChannel(
-                        CHANNEL_ID,
-                        "Apple Remote Bridge",
-                        NotificationManager.IMPORTANCE_LOW
-                    )
+                    NotificationChannel(CHANNEL_ID, "Apple Remote Bridge", NotificationManager.IMPORTANCE_LOW)
                 )
             }
             startForeground(NOTIFICATION_ID, note("Starting Companion server…"))
@@ -59,23 +48,11 @@ class CompanionBridgeService : Service() {
             Log.e(TAG, "Foreground init failed, continuing as normal service", e)
         }
 
-        CompanionPythonBridge.onReady = { port ->
-            mainHandler.post {
-                try {
-                    unregisterMdns()
-                    registerMdns(port)
-                } catch (e: Throwable) {
-                    CrashReporter.save(this, "MDNS READY CALLBACK", e)
-                }
-            }
-        }
-        CompanionPythonBridge.onStatusChanged = { text ->
-            mainHandler.post {
-                updateNotification(text)
-            }
-        }
-
-        // Give the Android service a moment to settle before loading native Python libs.
+        CompanionPythonBridge.onReady = { port -> mainHandler.post {
+            try { unregisterMdns(); registerMdns(port) }
+            catch (e: Throwable) { CrashReporter.save(this, "MDNS READY CALLBACK", e) }
+        } }
+        CompanionPythonBridge.onStatusChanged = { text -> mainHandler.post { updateNotification(text) } }
         mainHandler.postDelayed({ startPythonServer() }, 700)
     }
 
@@ -85,24 +62,15 @@ class CompanionBridgeService : Service() {
         pythonExecutor.execute {
             try {
                 CrashReporter.save(this, "STATUS: starting embedded Python runtime")
-                if (!Python.isStarted()) {
-                    Python.start(AndroidPlatform(applicationContext))
-                }
+                if (!Python.isStarted()) Python.start(AndroidPlatform(applicationContext))
                 CrashReporter.save(this, "STATUS: Python runtime started")
-
                 val identity = CompanionIdentity(this).identifier
-                Log.i(TAG, "Starting embedded Companion Link server for $identity")
                 CrashReporter.save(this, "STATUS: loading android_companion module")
-
-                Python.getInstance()
-                    .getModule("android_companion")
-                    .callAttr("run_server", identity)
+                Python.getInstance().getModule("android_companion").callAttr("run_server", identity)
             } catch (e: Throwable) {
                 Log.e(TAG, "Embedded Companion server failed", e)
                 CrashReporter.save(this, "PYTHON SERVER", e)
-                mainHandler.post {
-                    updateNotification("Companion error: ${e.javaClass.simpleName}")
-                }
+                mainHandler.post { updateNotification("Companion error: ${e.javaClass.simpleName}") }
             }
         }
     }
@@ -110,35 +78,25 @@ class CompanionBridgeService : Service() {
     private fun registerMdns(port: Int) {
         try {
             val info = NsdServiceInfo().apply {
-                serviceName = "Android TV"
+                serviceName = DEVICE_NAME
                 serviceType = "_companion-link._tcp"
                 setPort(port)
-                CompanionIdentity(this@CompanionBridgeService).txtRecords().forEach { (key, value) ->
-                    setAttribute(key, value)
-                }
+                CompanionIdentity(this@CompanionBridgeService).txtRecords().forEach { (key, value) -> setAttribute(key, value) }
             }
-
             listener = object : NsdManager.RegistrationListener {
                 override fun onServiceRegistered(serviceInfo: NsdServiceInfo) {
-                    Log.i(TAG, "mDNS registered as ${serviceInfo.serviceName} on $port")
                     CrashReporter.save(this@CompanionBridgeService, "STATUS: READY • PIN 1337 • ${serviceInfo.serviceName} • port $port")
                     updateNotification("Ready • PIN 1337 • ${serviceInfo.serviceName}")
                 }
-
                 override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
                     val msg = "mDNS registration failed: $errorCode"
-                    Log.e(TAG, msg)
-                    CrashReporter.save(this@CompanionBridgeService, msg)
-                    updateNotification(msg)
+                    CrashReporter.save(this@CompanionBridgeService, msg); updateNotification(msg)
                 }
-
                 override fun onServiceUnregistered(serviceInfo: NsdServiceInfo) = Unit
                 override fun onUnregistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) = Unit
             }
-
             nsd.registerService(info, NsdManager.PROTOCOL_DNS_SD, listener)
         } catch (e: Throwable) {
-            Log.e(TAG, "mDNS setup failed", e)
             CrashReporter.save(this, "MDNS SETUP", e)
             updateNotification("mDNS error: ${e.javaClass.simpleName}")
         }
@@ -147,50 +105,27 @@ class CompanionBridgeService : Service() {
     private fun unregisterMdns() {
         val current = listener ?: return
         listener = null
-        try {
-            nsd.unregisterService(current)
-        } catch (e: Throwable) {
-            Log.d(TAG, "mDNS unregister ignored: ${e.message}")
-        }
+        try { nsd.unregisterService(current) } catch (_: Throwable) {}
     }
 
     private fun note(text: String): Notification {
-        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, CHANNEL_ID)
-        } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(this)
-        }
-
-        return builder
-            .setContentTitle("Apple Remote Bridge")
-            .setContentText(text)
-            .setSmallIcon(android.R.drawable.ic_media_play)
-            .build()
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) Notification.Builder(this, CHANNEL_ID)
+        else { @Suppress("DEPRECATION") Notification.Builder(this) }
+        return builder.setContentTitle("Apple Remote Bridge").setContentText(text)
+            .setSmallIcon(android.R.drawable.ic_media_play).build()
     }
 
     private fun updateNotification(text: String) {
-        try {
-            getSystemService(NotificationManager::class.java)
-                .notify(NOTIFICATION_ID, note(text))
-        } catch (e: Throwable) {
-            Log.e(TAG, "notification failed", e)
-        }
+        try { getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, note(text)) }
+        catch (e: Throwable) { Log.e(TAG, "notification failed", e) }
     }
 
     override fun onDestroy() {
         CompanionPythonBridge.onReady = null
         CompanionPythonBridge.onStatusChanged = null
         unregisterMdns()
-
-        try {
-            if (Python.isStarted()) {
-                Python.getInstance().getModule("android_companion").callAttr("stop_server")
-            }
-        } catch (e: Throwable) {
-            Log.d(TAG, "Python stop ignored: ${e.message}")
-        }
-
+        try { if (Python.isStarted()) Python.getInstance().getModule("android_companion").callAttr("stop_server") }
+        catch (_: Throwable) {}
         pythonExecutor.shutdownNow()
         super.onDestroy()
     }
