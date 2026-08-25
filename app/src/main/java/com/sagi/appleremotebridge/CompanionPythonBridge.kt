@@ -1,5 +1,6 @@
 package com.sagi.appleremotebridge
 
+import android.content.Context
 import android.util.Log
 
 /** Static entry points called from the embedded Python Companion server. */
@@ -7,10 +8,23 @@ object CompanionPythonBridge {
     private const val TAG = "CompanionPythonBridge"
 
     @Volatile
+    private var appContext: Context? = null
+
+    @Volatile
     var onReady: ((Int) -> Unit)? = null
 
     @Volatile
     var onStatusChanged: ((String) -> Unit)? = null
+
+    fun initialize(context: Context) {
+        appContext = context.applicationContext
+    }
+
+    @JvmStatic
+    fun getStateDir(): String {
+        val context = appContext ?: error("CompanionPythonBridge not initialized")
+        return context.filesDir.absolutePath
+    }
 
     @JvmStatic
     fun onServerReady(port: Int) {
@@ -37,12 +51,10 @@ object CompanionPythonBridge {
             "PLAY_PAUSE", "PLAY", "PAUSE" -> RemoteCommand.PLAY_PAUSE
             else -> null
         }
-
         if (remote == null) {
             Log.d(TAG, "Ignoring unsupported command: $command")
             return false
         }
-
         val handled = RemoteAccessibilityService.dispatch(remote)
         Log.d(TAG, "Dispatch $command -> $handled")
         return handled
