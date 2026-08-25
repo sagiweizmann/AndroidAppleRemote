@@ -6,6 +6,7 @@ import android.provider.Settings
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
+import android.view.ViewGroup
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 
@@ -79,7 +80,7 @@ class MainActivity : AppCompatActivity() {
             rb("▲ UP", RemoteCommand.UP), row, rb("▼ DOWN", RemoteCommand.DOWN),
             rb("BACK", RemoteCommand.BACK), rb("HOME", RemoteCommand.HOME), stop
         ).forEach { layout.addView(it, LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 8, 0, 8) }) }
-        scroll.addView(layout, ScrollView.LayoutParams(-1, -2))
+        scroll.addView(layout, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         setContentView(scroll)
         refreshDiagnostics()
     }
