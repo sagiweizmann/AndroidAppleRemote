@@ -33,6 +33,7 @@ class CompanionBridgeService : Service() {
     override fun onCreate() {
         super.onCreate()
         CrashReporter.install(this)
+        CompanionPythonBridge.initialize(applicationContext)
         try { nsd = getSystemService(Context.NSD_SERVICE) as NsdManager }
         catch (e: Throwable) { CrashReporter.save(this, "NSD INIT", e); stopSelf(); return }
 
@@ -52,7 +53,10 @@ class CompanionBridgeService : Service() {
             try { unregisterMdns(); registerMdns(port) }
             catch (e: Throwable) { CrashReporter.save(this, "MDNS READY CALLBACK", e) }
         } }
-        CompanionPythonBridge.onStatusChanged = { text -> mainHandler.post { updateNotification(text) } }
+        CompanionPythonBridge.onStatusChanged = { text -> mainHandler.post {
+            CrashReporter.save(this, "STATUS: $text")
+            updateNotification(text)
+        } }
         mainHandler.postDelayed({ startPythonServer() }, 700)
     }
 
