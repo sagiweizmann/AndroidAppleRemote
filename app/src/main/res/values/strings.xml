@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Apple Remote Bridge</string>
+    <string name="accessibility_description">Receives navigation commands from the iPhone Apple TV Remote and controls Android TV.</string>
+</resources>
