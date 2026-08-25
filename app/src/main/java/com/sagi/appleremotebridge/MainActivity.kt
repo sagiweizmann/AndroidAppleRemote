@@ -13,9 +13,11 @@ import androidx.appcompat.app.AppCompatActivity
 class MainActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var errorBox: TextView
+    private lateinit var traceBox: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         CrashReporter.install(this)
+        CompanionPythonBridge.initialize(applicationContext)
         super.onCreate(savedInstanceState)
 
         val layout = LinearLayout(this).apply {
@@ -35,35 +37,43 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             setPadding(8, 8, 8, 8)
         }
-        refreshLastError()
+
+        traceBox = TextView(this).apply {
+            textSize = 12f
+            gravity = Gravity.START
+            setPadding(8, 8, 8, 8)
+        }
+
+        refreshDiagnostics()
 
         val start = Button(this).apply {
             text = "Start Apple TV emulation"
             setOnClickListener {
                 try {
                     CrashReporter.clear(this@MainActivity)
-                    refreshLastError()
-                    // Android TV 10: use normal service start while Activity is foreground.
+                    CompanionPythonBridge.clearTrace()
+                    refreshDiagnostics()
                     startService(Intent(this@MainActivity, CompanionBridgeService::class.java))
                     status.text = "Starting Companion server…"
                 } catch (e: Throwable) {
                     CrashReporter.save(this@MainActivity, "START SERVICE", e)
                     status.text = "Start failed: ${e.javaClass.simpleName}: ${e.message ?: "unknown"}"
-                    refreshLastError()
+                    refreshDiagnostics()
                 }
             }
         }
 
-        val showLastError = Button(this).apply {
-            text = "Show last error"
-            setOnClickListener { refreshLastError() }
+        val showDiagnostics = Button(this).apply {
+            text = "Show pairing trace"
+            setOnClickListener { refreshDiagnostics() }
         }
 
-        val clearError = Button(this).apply {
-            text = "Clear error"
+        val clearDiagnostics = Button(this).apply {
+            text = "Clear diagnostics"
             setOnClickListener {
                 CrashReporter.clear(this@MainActivity)
-                refreshLastError()
+                CompanionPythonBridge.clearTrace()
+                refreshDiagnostics()
             }
         }
 
@@ -130,9 +140,10 @@ class MainActivity : AppCompatActivity() {
             TextView(this).apply { text = "Apple Remote Bridge"; textSize = 28f; gravity = Gravity.CENTER },
             status,
             errorBox,
+            traceBox,
             start,
-            showLastError,
-            clearError,
+            showDiagnostics,
+            clearDiagnostics,
             accessibility,
             TextView(this).apply { text = "Accessibility remote test"; textSize = 18f; gravity = Gravity.CENTER },
             up, row1, down, row2, stop
@@ -145,12 +156,14 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (::errorBox.isInitialized) refreshLastError()
+        if (::errorBox.isInitialized) refreshDiagnostics()
     }
 
-    private fun refreshLastError() {
+    private fun refreshDiagnostics() {
         val last = CrashReporter.read(this)
         errorBox.text = if (last.isNullOrBlank()) "Last error: none" else "LAST ERROR:\n$last"
+        val trace = CompanionPythonBridge.getTrace()
+        traceBox.text = if (trace.isBlank()) "PAIRING TRACE: none" else "PAIRING TRACE:\n$trace"
     }
 
     private fun openGeneralSettings() {
@@ -160,7 +173,7 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             CrashReporter.save(this, "GENERAL SETTINGS", e)
             status.text = "Could not open TV settings."
-            refreshLastError()
+            refreshDiagnostics()
         }
     }
 }
