@@ -1,15 +1,20 @@
 package com.sagi.appleremotebridge
 
-import android.app.*
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
-import java.net.ServerSocket
-import java.net.Socket
+import com.chaquo.python.Python
+import com.chaquo.python.android.AndroidPlatform
 import java.util.concurrent.Executors
 
 class CompanionBridgeService : Service() {
@@ -19,8 +24,8 @@ class CompanionBridgeService : Service() {
         private const val NOTIFICATION_ID = 1001
     }
 
-    private val io = Executors.newCachedThreadPool()
-    private var server: ServerSocket? = null
+    private val pythonExecutor = Executors.newSingleThreadExecutor()
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var listener: NsdManager.RegistrationListener? = null
     private lateinit var nsd: NsdManager
 
@@ -38,42 +43,44 @@ class CompanionBridgeService : Service() {
             )
         }
 
-        startForeground(NOTIFICATION_ID, note("Starting…"))
-        startServer()
+        startForeground(NOTIFICATION_ID, note("Starting Companion server…"))
+
+        CompanionPythonBridge.onReady = { port ->
+            mainHandler.post {
+                unregisterMdns()
+                registerMdns(port)
+            }
+        }
+        CompanionPythonBridge.onStatusChanged = { text ->
+            mainHandler.post { updateNotification(text) }
+        }
+
+        startPythonServer()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun startServer() {
-        io.execute {
+    private fun startPythonServer() {
+        pythonExecutor.execute {
             try {
-                val localServer = ServerSocket(0)
-                server = localServer
-                register(localServer.localPort)
-                updateNotification("Advertising as Android TV")
-
-                // Important: accept on ONE server thread. The previous implementation queued
-                // unlimited blocking accept() calls into a cached thread pool and could exhaust
-                // the process almost immediately.
-                while (!localServer.isClosed) {
-                    try {
-                        val socket = localServer.accept()
-                        Log.i(TAG, "Connection from ${socket.inetAddress?.hostAddress}")
-                        io.execute { probe(socket) }
-                    } catch (e: Exception) {
-                        if (!localServer.isClosed) {
-                            Log.e(TAG, "accept failed", e)
-                        }
-                    }
+                if (!Python.isStarted()) {
+                    Python.start(AndroidPlatform(applicationContext))
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "server failed", e)
-                updateNotification("Server error: ${e.javaClass.simpleName}")
+                val identity = CompanionIdentity(this).identifier
+                Log.i(TAG, "Starting embedded Companion Link server for $identity")
+                Python.getInstance()
+                    .getModule("android_companion")
+                    .callAttr("run_server", identity)
+            } catch (e: Throwable) {
+                Log.e(TAG, "Embedded Companion server failed", e)
+                mainHandler.post {
+                    updateNotification("Companion error: ${e.javaClass.simpleName}")
+                }
             }
         }
     }
 
-    private fun register(port: Int) {
+    private fun registerMdns(port: Int) {
         try {
             val info = NsdServiceInfo().apply {
                 serviceName = "Android TV"
@@ -86,8 +93,8 @@ class CompanionBridgeService : Service() {
 
             listener = object : NsdManager.RegistrationListener {
                 override fun onServiceRegistered(serviceInfo: NsdServiceInfo) {
-                    Log.i(TAG, "mDNS registered as ${serviceInfo.serviceName}")
-                    updateNotification("Visible as ${serviceInfo.serviceName}")
+                    Log.i(TAG, "mDNS registered as ${serviceInfo.serviceName} on $port")
+                    updateNotification("Ready • PIN 1337 • ${serviceInfo.serviceName}")
                 }
 
                 override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
@@ -106,19 +113,12 @@ class CompanionBridgeService : Service() {
         }
     }
 
-    private fun probe(socket: Socket) {
-        socket.use {
-            try {
-                it.soTimeout = 8000
-                val buffer = ByteArray(4096)
-                val count = it.getInputStream().read(buffer)
-                if (count > 0) {
-                    Log.i(TAG, "Received $count Companion bytes")
-                    updateNotification("iPhone reached Companion server ✓")
-                }
-            } catch (e: Exception) {
-                Log.d(TAG, "Connection probe ended: ${e.message}")
-            }
+    private fun unregisterMdns() {
+        val current = listener ?: return
+        listener = null
+        try {
+            nsd.unregisterService(current)
+        } catch (_: Exception) {
         }
     }
 
@@ -147,17 +147,19 @@ class CompanionBridgeService : Service() {
     }
 
     override fun onDestroy() {
-        listener?.let {
-            try {
-                nsd.unregisterService(it)
-            } catch (_: Exception) {
-            }
-        }
+        CompanionPythonBridge.onReady = null
+        CompanionPythonBridge.onStatusChanged = null
+        unregisterMdns()
+
         try {
-            server?.close()
-        } catch (_: Exception) {
+            if (Python.isStarted()) {
+                Python.getInstance().getModule("android_companion").callAttr("stop_server")
+            }
+        } catch (e: Throwable) {
+            Log.d(TAG, "Python stop ignored: ${e.message}")
         }
-        io.shutdownNow()
+
+        pythonExecutor.shutdownNow()
         super.onDestroy()
     }
 }
