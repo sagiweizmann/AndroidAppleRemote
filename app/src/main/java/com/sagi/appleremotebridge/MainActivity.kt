@@ -61,6 +61,41 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        fun remoteButton(label: String, command: RemoteCommand) = Button(this).apply {
+            text = label
+            setOnClickListener {
+                val ok = RemoteAccessibilityService.dispatch(command)
+                status.text = if (ok) {
+                    "Sent $label through Accessibility"
+                } else {
+                    "Accessibility not enabled, or this screen cannot handle $label"
+                }
+            }
+        }
+
+        val up = remoteButton("▲ UP", RemoteCommand.UP)
+        val left = remoteButton("◀ LEFT", RemoteCommand.LEFT)
+        val ok = remoteButton("OK", RemoteCommand.OK)
+        val right = remoteButton("RIGHT ▶", RemoteCommand.RIGHT)
+        val down = remoteButton("▼ DOWN", RemoteCommand.DOWN)
+        val back = remoteButton("BACK", RemoteCommand.BACK)
+        val home = remoteButton("HOME", RemoteCommand.HOME)
+
+        val row1 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            addView(left, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(ok, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(right, LinearLayout.LayoutParams(0, -2, 1f))
+        }
+
+        val row2 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            addView(back, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(home, LinearLayout.LayoutParams(0, -2, 1f))
+        }
+
         val stop = Button(this).apply {
             text = "Stop"
             setOnClickListener {
@@ -78,6 +113,15 @@ class MainActivity : AppCompatActivity() {
             status,
             start,
             accessibility,
+            TextView(this).apply {
+                text = "Accessibility remote test"
+                textSize = 18f
+                gravity = Gravity.CENTER
+            },
+            up,
+            row1,
+            down,
+            row2,
             stop
         ).forEach {
             layout.addView(
