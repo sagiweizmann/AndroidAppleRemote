@@ -5,13 +5,13 @@ import java.security.MessageDigest
 import java.util.UUID
 
 class CompanionIdentity(context: Context) {
-    private val prefs = context.getSharedPreferences("companion_identity_xiaomi_v1", Context.MODE_PRIVATE)
+    private val prefs = context.getSharedPreferences("companion_identity_xiaomi_v2", Context.MODE_PRIVATE)
     val identifier: String = prefs.getString("identifier", null) ?: UUID.randomUUID().toString().also {
         prefs.edit().putString("identifier", it).apply()
     }
 
     private fun bytes(field: String): ByteArray = MessageDigest.getInstance("SHA-256")
-        .digest("AndroidAppleRemote-Xiaomi-v1\u0000$field\u0000$identifier".toByteArray())
+        .digest("AndroidAppleRemote-Xiaomi-v2\u0000$field\u0000$identifier".toByteArray())
         .copyOfRange(0, 6)
 
     private fun hex(field: String) = bytes(field).joinToString("") { "%02x".format(it.toInt() and 0xff) }
