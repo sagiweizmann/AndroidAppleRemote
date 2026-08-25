@@ -9,10 +9,13 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.ContextCompat
 
 class MainActivity : AppCompatActivity() {
+    private lateinit var status: TextView
+    private lateinit var errorBox: TextView
+
     override fun onCreate(savedInstanceState: Bundle?) {
+        CrashReporter.install(this)
         super.onCreate(savedInstanceState)
 
         val layout = LinearLayout(this).apply {
@@ -21,24 +24,46 @@ class MainActivity : AppCompatActivity() {
             setPadding(48, 48, 48, 48)
         }
 
-        val status = TextView(this).apply {
+        status = TextView(this).apply {
             text = "Companion discovery + Android TV accessibility bridge"
             textSize = 16f
             gravity = Gravity.CENTER
         }
 
+        errorBox = TextView(this).apply {
+            textSize = 13f
+            gravity = Gravity.CENTER
+            setPadding(8, 8, 8, 8)
+        }
+        refreshLastError()
+
         val start = Button(this).apply {
             text = "Start Apple TV emulation"
             setOnClickListener {
                 try {
-                    ContextCompat.startForegroundService(
-                        this@MainActivity,
-                        Intent(this@MainActivity, CompanionBridgeService::class.java)
-                    )
-                    status.text = "Advertising as Android TV. Open Apple TV Remote on iPhone."
-                } catch (e: Exception) {
-                    status.text = "Could not start service: ${e.javaClass.simpleName}"
+                    CrashReporter.clear(this@MainActivity)
+                    refreshLastError()
+                    // Android TV 10: use normal service start while Activity is foreground.
+                    startService(Intent(this@MainActivity, CompanionBridgeService::class.java))
+                    status.text = "Starting Companion server…"
+                } catch (e: Throwable) {
+                    CrashReporter.save(this@MainActivity, "START SERVICE", e)
+                    status.text = "Start failed: ${e.javaClass.simpleName}: ${e.message ?: "unknown"}"
+                    refreshLastError()
                 }
+            }
+        }
+
+        val showLastError = Button(this).apply {
+            text = "Show last error"
+            setOnClickListener { refreshLastError() }
+        }
+
+        val clearError = Button(this).apply {
+            text = "Clear error"
+            setOnClickListener {
+                CrashReporter.clear(this@MainActivity)
+                refreshLastError()
             }
         }
 
@@ -51,12 +76,13 @@ class MainActivity : AppCompatActivity() {
                         startActivity(direct)
                         status.text = "Enable Apple Remote Bridge under Accessibility."
                     } else {
-                        openGeneralSettings(status)
+                        openGeneralSettings()
                     }
                 } catch (_: ActivityNotFoundException) {
-                    openGeneralSettings(status)
-                } catch (_: Exception) {
-                    openGeneralSettings(status)
+                    openGeneralSettings()
+                } catch (e: Exception) {
+                    CrashReporter.save(this@MainActivity, "ACCESSIBILITY SETTINGS", e)
+                    openGeneralSettings()
                 }
             }
         }
@@ -65,11 +91,7 @@ class MainActivity : AppCompatActivity() {
             text = label
             setOnClickListener {
                 val ok = RemoteAccessibilityService.dispatch(command)
-                status.text = if (ok) {
-                    "Sent $label through Accessibility"
-                } else {
-                    "Accessibility not enabled, or this screen cannot handle $label"
-                }
+                status.text = if (ok) "Sent $label" else "Accessibility not enabled or action unsupported"
             }
         }
 
@@ -105,40 +127,40 @@ class MainActivity : AppCompatActivity() {
         }
 
         listOf(
-            TextView(this).apply {
-                text = "Apple Remote Bridge"
-                textSize = 28f
-                gravity = Gravity.CENTER
-            },
+            TextView(this).apply { text = "Apple Remote Bridge"; textSize = 28f; gravity = Gravity.CENTER },
             status,
+            errorBox,
             start,
+            showLastError,
+            clearError,
             accessibility,
-            TextView(this).apply {
-                text = "Accessibility remote test"
-                textSize = 18f
-                gravity = Gravity.CENTER
-            },
-            up,
-            row1,
-            down,
-            row2,
-            stop
+            TextView(this).apply { text = "Accessibility remote test"; textSize = 18f; gravity = Gravity.CENTER },
+            up, row1, down, row2, stop
         ).forEach {
-            layout.addView(
-                it,
-                LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 12, 0, 12) }
-            )
+            layout.addView(it, LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 10, 0, 10) })
         }
 
         setContentView(layout)
     }
 
-    private fun openGeneralSettings(status: TextView) {
+    override fun onResume() {
+        super.onResume()
+        if (::errorBox.isInitialized) refreshLastError()
+    }
+
+    private fun refreshLastError() {
+        val last = CrashReporter.read(this)
+        errorBox.text = if (last.isNullOrBlank()) "Last error: none" else "LAST ERROR:\n$last"
+    }
+
+    private fun openGeneralSettings() {
         try {
             startActivity(Intent(Settings.ACTION_SETTINGS))
-            status.text = "This TV has no direct Accessibility screen intent. Open Accessibility manually in Settings."
+            status.text = "Open Accessibility manually in TV settings."
         } catch (e: Exception) {
-            status.text = "TV Settings could not be opened automatically. Open Settings > Accessibility manually."
+            CrashReporter.save(this, "GENERAL SETTINGS", e)
+            status.text = "Could not open TV settings."
+            refreshLastError()
         }
     }
 }
