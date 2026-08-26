@@ -1,5 +1,6 @@
 package com.sagi.appleremotebridge
 
+import android.content.ComponentName
 import android.content.Intent
 import android.graphics.Rect
 import android.os.Build
@@ -301,8 +302,29 @@ class MainActivity : AppCompatActivity() {
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     private fun openAccessibility() {
-        try { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
-        catch (_: Throwable) { startActivity(Intent(Settings.ACTION_SETTINGS)) }
+        val component = ComponentName(this, RemoteAccessibilityService::class.java)
+        val candidates = listOf(
+            Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS").apply {
+                putExtra(Intent.EXTRA_COMPONENT_NAME, component.flattenToString())
+            },
+            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS),
+            Intent(Settings.ACTION_SETTINGS)
+        )
+
+        for (intent in candidates) {
+            try {
+                if (intent.resolveActivity(packageManager) != null) {
+                    startActivity(intent)
+                    CompanionPythonBridge.onStatus("A11Y SETTINGS • opened ${intent.action}")
+                    return
+                }
+            } catch (e: Throwable) {
+                CompanionPythonBridge.onStatus("A11Y SETTINGS • ${intent.action} failed: ${e.javaClass.simpleName}")
+            }
+        }
+
+        Toast.makeText(this, "This Android TV firmware does not expose Accessibility settings to apps.", Toast.LENGTH_LONG).show()
+        CompanionPythonBridge.onStatus("A11Y SETTINGS • no supported settings activity")
     }
 
     private fun startBridge() {
