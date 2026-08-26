@@ -1,9 +1,12 @@
 package com.sagi.appleremotebridge
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
 import android.content.Context
+import android.graphics.Path
 import android.graphics.Rect
 import android.media.AudioManager
+import android.os.Build
 import android.view.KeyEvent
 import android.view.View
 import android.view.accessibility.AccessibilityEvent
@@ -23,27 +26,119 @@ class RemoteAccessibilityService : AccessibilityService() {
         serviceInfo = serviceInfo.apply {
             flags = flags or android.accessibilityservice.AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
         }
+        CompanionPythonBridge.onStatus("A11Y • connected • sdk=${Build.VERSION.SDK_INT} • gestures=enabled")
     }
 
-    override fun onDestroy() { if (instance === this) instance = null; super.onDestroy() }
+    override fun onDestroy() {
+        if (instance === this) instance = null
+        CompanionPythonBridge.onStatus("A11Y • disconnected")
+        super.onDestroy()
+    }
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {}
     override fun onInterrupt() {}
 
     private fun handle(c: RemoteCommand): Boolean = when (c) {
         RemoteCommand.BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
         RemoteCommand.HOME -> performGlobalAction(GLOBAL_ACTION_HOME)
-        RemoteCommand.OK -> clickFocused()
-        RemoteCommand.UP -> moveFocus(View.FOCUS_UP)
-        RemoteCommand.DOWN -> moveFocus(View.FOCUS_DOWN)
-        RemoteCommand.LEFT -> moveFocus(View.FOCUS_LEFT)
-        RemoteCommand.RIGHT -> moveFocus(View.FOCUS_RIGHT)
+        RemoteCommand.OK -> navigateOrTap(RemoteCommand.OK)
+        RemoteCommand.UP -> navigateOrTap(RemoteCommand.UP)
+        RemoteCommand.DOWN -> navigateOrTap(RemoteCommand.DOWN)
+        RemoteCommand.LEFT -> navigateOrTap(RemoteCommand.LEFT)
+        RemoteCommand.RIGHT -> navigateOrTap(RemoteCommand.RIGHT)
         RemoteCommand.PLAY -> mediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
         RemoteCommand.MEDIA_NEXT -> mediaKey(KeyEvent.KEYCODE_MEDIA_NEXT)
         RemoteCommand.MEDIA_PREVIOUS -> mediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS)
         RemoteCommand.VOLUME_UP -> volume(AudioManager.ADJUST_RAISE)
         RemoteCommand.VOLUME_DOWN -> volume(AudioManager.ADJUST_LOWER)
         RemoteCommand.MUTE -> volume(AudioManager.ADJUST_TOGGLE_MUTE)
-        RemoteCommand.POWER -> if (android.os.Build.VERSION.SDK_INT >= 28) performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN) else false
+        RemoteCommand.POWER -> if (Build.VERSION.SDK_INT >= 28) performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN) else false
+    }
+
+    private fun navigateOrTap(command: RemoteCommand): Boolean {
+        if (Build.VERSION.SDK_INT >= 33) {
+            val action = when (command) {
+                RemoteCommand.UP -> GLOBAL_ACTION_DPAD_UP
+                RemoteCommand.DOWN -> GLOBAL_ACTION_DPAD_DOWN
+                RemoteCommand.LEFT -> GLOBAL_ACTION_DPAD_LEFT
+                RemoteCommand.RIGHT -> GLOBAL_ACTION_DPAD_RIGHT
+                RemoteCommand.OK -> GLOBAL_ACTION_DPAD_CENTER
+                else -> -1
+            }
+            if (action != -1) {
+                val ok = performGlobalAction(action)
+                CompanionPythonBridge.onStatus("NAV • $command • system-dpad=$ok")
+                if (ok) return true
+            }
+        }
+
+        val gestureAccepted = performNavigationGesture(command)
+        CompanionPythonBridge.onStatus("NAV • $command • gesture-accepted=$gestureAccepted")
+        if (gestureAccepted) return true
+
+        val fallback = if (command == RemoteCommand.OK) clickFocused() else moveFocus(
+            when (command) {
+                RemoteCommand.UP -> View.FOCUS_UP
+                RemoteCommand.DOWN -> View.FOCUS_DOWN
+                RemoteCommand.LEFT -> View.FOCUS_LEFT
+                RemoteCommand.RIGHT -> View.FOCUS_RIGHT
+                else -> View.FOCUS_FORWARD
+            }
+        )
+        CompanionPythonBridge.onStatus("NAV • $command • node-fallback=$fallback")
+        return fallback
+    }
+
+    private fun performNavigationGesture(command: RemoteCommand): Boolean {
+        val dm = resources.displayMetrics
+        val w = dm.widthPixels.toFloat()
+        val h = dm.heightPixels.toFloat()
+        if (w <= 0f || h <= 0f) return false
+
+        val cx = w * 0.5f
+        val cy = h * 0.5f
+        val dx = w * 0.20f
+        val dy = h * 0.20f
+        val path = Path()
+
+        if (command == RemoteCommand.OK) {
+            path.moveTo(cx, cy)
+            val gesture = GestureDescription.Builder()
+                .addStroke(GestureDescription.StrokeDescription(path, 0, 70))
+                .build()
+            return dispatchGesture(gesture, object : GestureResultCallback() {
+                override fun onCompleted(gestureDescription: GestureDescription?) {
+                    CompanionPythonBridge.onStatus("NAV • OK • gesture-completed")
+                }
+                override fun onCancelled(gestureDescription: GestureDescription?) {
+                    CompanionPythonBridge.onStatus("NAV • OK • gesture-cancelled")
+                }
+            }, null)
+        }
+
+        val endX = when (command) {
+            RemoteCommand.LEFT -> cx - dx
+            RemoteCommand.RIGHT -> cx + dx
+            else -> cx
+        }
+        val endY = when (command) {
+            RemoteCommand.UP -> cy - dy
+            RemoteCommand.DOWN -> cy + dy
+            else -> cy
+        }
+        path.moveTo(cx, cy)
+        path.lineTo(endX, endY)
+
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 150))
+            .build()
+        return dispatchGesture(gesture, object : GestureResultCallback() {
+            override fun onCompleted(gestureDescription: GestureDescription?) {
+                CompanionPythonBridge.onStatus("NAV • $command • gesture-completed")
+            }
+            override fun onCancelled(gestureDescription: GestureDescription?) {
+                CompanionPythonBridge.onStatus("NAV • $command • gesture-cancelled")
+            }
+        }, null)
     }
 
     private fun moveFocus(direction: Int): Boolean {
