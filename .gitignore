@@ -3,6 +3,11 @@
 /app/build/
 /.gradle/
 
+# Signing material - never commit
+/keystore.properties
+*.jks
+*.keystore
+
 # IDE / machine-local
 /.idea/
 /local.properties

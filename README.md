@@ -169,6 +169,23 @@ at the usual Homebrew locations, or point at it explicitly:
 
 GitHub Actions also builds APK artifacts for repository revisions.
 
+### Releases
+
+Tagging a commit builds a **signed** release APK and publishes it to GitHub Releases:
+
+```bash
+git tag v0.3.0
+git push origin v0.3.0
+```
+
+Signing material never lives in the repository. `.github/workflows/release.yml` reads it from
+the `RELEASE_KEYSTORE_BASE64`, `RELEASE_KEYSTORE_PASSWORD`, `RELEASE_KEY_ALIAS` and
+`RELEASE_KEY_PASSWORD` repository secrets, and the workflow fails rather than publishing
+anything unsigned. Locally, the same values come from a gitignored `keystore.properties`;
+without it, release builds are simply left unsigned.
+
+Prebuilt APKs are on the [Releases page](../../releases).
+
 ### Testing against an emulator
 
 An Android emulator sits behind the emulator's NAT, so its mDNS advertisement never reaches

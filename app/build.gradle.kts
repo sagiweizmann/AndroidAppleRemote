@@ -1,10 +1,21 @@
 import java.io.File
+import java.util.Properties
 
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("com.chaquo.python")
 }
+
+// Release signing. CI passes these through the environment; locally they come from
+// keystore.properties, which is gitignored along with the keystore itself. With neither
+// present, release builds simply stay unsigned and debug builds are unaffected.
+val keystoreProps = Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+fun signingValue(key: String, env: String): String? =
+    keystoreProps.getProperty(key) ?: System.getenv(env)
 
 android {
     namespace = "com.sagi.appleremotebridge"
@@ -19,6 +30,28 @@ android {
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
+    }
+
+    signingConfigs {
+        create("release") {
+            val path = signingValue("storeFile", "KEYSTORE_FILE")
+            if (path != null && file(path).exists()) {
+                storeFile = file(path)
+                storePassword = signingValue("storePassword", "KEYSTORE_PASSWORD")
+                keyAlias = signingValue("keyAlias", "KEY_ALIAS")
+                keyPassword = signingValue("keyPassword", "KEY_PASSWORD")
+                enableV2Signing = true
+                enableV3Signing = true   // allows signing-key rotation later
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            // Leave the build unsigned rather than failing when no key is configured.
+            signingConfig = signingConfigs.getByName("release").takeIf { it.storeFile != null }
         }
     }
 
