@@ -6,14 +6,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from java import jclass
 from atvr4samsung.companion.protocol.appletv import FakeCompanionService, FakeCompanionState
-from atvr4samsung.companion.protocol.enums import FrameType, TouchAction
+from atvr4samsung.companion.protocol.enums import FrameType, TouchAction, KeyboardFocusState
 
 Bridge = jclass("com.sagi.appleremotebridge.CompanionPythonBridge")
 _LOOP = None
 _SERVER = None
 PIN = "1337"
 
-# Captured iOS 26 Companion HID wire codes from atvr4samsung's live-tested bridge.
 HID_TO_ANDROID = {
     1: "UP", 2: "DOWN", 3: "LEFT", 4: "RIGHT",
     5: "BACK", 6: "OK", 7: "HOME",
@@ -80,6 +79,16 @@ class AndroidPairedClients:
     def empty(self): return self.count() == 0
 
 
+class AndroidCompanionState(FakeCompanionState):
+    def create_session(self, owner=None):
+        session = super().create_session(owner)
+        # FakeCompanionState defaults RTI to Focused. That makes iOS show its text keyboard.
+        # A TV remote should start with no text-input focus so the touch surface stays a trackpad.
+        session._rti_focus_state = KeyboardFocusState.Unfocused
+        session.rti_text = None
+        return session
+
+
 class AndroidCompanionService(FakeCompanionService):
     _seq = 0
     def __init__(self, state, *, name, identifier, private_key, server_generation, pairing_window, paired_clients):
@@ -91,7 +100,6 @@ class AndroidCompanionService(FakeCompanionService):
         self._android_touch_start = None
         self._rx = 0; self._tx = 0; self._last_ok = 0.0
 
-    # Android rotates into a fresh UUID/generation/state directory, so Linux recovery fencing is irrelevant.
     def _identity_reset_in_progress(self): return False
 
     def connection_made(self, t):
@@ -116,7 +124,6 @@ class AndroidCompanionService(FakeCompanionService):
         trace(f"PAIR • {label} -> {'OK' if ok else 'FAILED'} • {self.authentication_phase.name}")
         return ok
 
-    # Log actual OPACK command identifiers/keys instead of only E_OPACK.
     def handle_command_frame(self, frame_type, data):
         if isinstance(data, dict):
             ident = data.get("_i") or data.get("_t") or data.get("_m") or "?"
@@ -126,7 +133,6 @@ class AndroidCompanionService(FakeCompanionService):
         return super().handle_command_frame(frame_type, data)
 
     def _dispatch(self, c):
-        # Center tap arrives as both HID Select and touch click; collapse the duplicate.
         if c == "OK":
             now = time.monotonic()
             if now - self._last_ok < 0.35: return
@@ -134,7 +140,6 @@ class AndroidCompanionService(FakeCompanionService):
         trace(f"REMOTE • {c}")
         Bridge.dispatch(c)
 
-    # Live iOS 26 mapping from atvr4samsung: _hBtS 1=press, 2=release; act once on release.
     def handle__hidc(self, m):
         super().handle__hidc(m)
         try:
@@ -153,8 +158,6 @@ class AndroidCompanionService(FakeCompanionService):
             cmd = {"play":"PLAY_PAUSE", "pause":"PLAY_PAUSE", "next":"MEDIA_NEXT", "previous":"MEDIA_PREVIOUS"}.get(after)
             if cmd: self._dispatch(cmd)
 
-    # Critical iOS 26 connection gate from atvr4samsung: RPHIDTouchSession requires a device ID.
-    # The protocol base replies with {}, which leaves Control Center stuck on Connecting and then disconnects.
     def handle__touchstart(self, m):
         try:
             c = m.get("_c", {})
@@ -170,20 +173,26 @@ class AndroidCompanionService(FakeCompanionService):
 
     def handle__hidt(self, m):
         c = m.get("_c", {}); p = int(c.get("_tPh", -1)); x = int(c.get("_cx", 0)); y = int(c.get("_cy", 0))
-        try: a = TouchAction(p)
-        except Exception: a = None
-        trace(f"TOUCH • phase={getattr(a, 'name', p)} x={x} y={y}")
-        if a == TouchAction.Press: self._android_touch_start = (x, y)
-        elif a == TouchAction.Click: self._dispatch("OK"); self._android_touch_start = None
-        elif a == TouchAction.Release:
+        trace(f"TOUCH • phase={p} x={x} y={y}")
+        # Live iOS 26 phases from atvr4samsung: 1=press, 3=hold/move, 4=release, 5=click.
+        if p == 1:
+            self._android_touch_start = (x, y)
+        elif p == 5:
+            self._dispatch("OK"); self._android_touch_start = None
+        elif p == 4:
             q = self._android_touch_start; self._android_touch_start = None
             if q:
                 dx, dy = x - q[0], y - q[1]
-                if abs(dx) >= 28 or abs(dy) >= 28:
-                    self._dispatch(("RIGHT" if dx > 0 else "LEFT") if abs(dx) > abs(dy) else ("DOWN" if dy > 0 else "UP"))
+                travel = max(abs(dx), abs(dy))
+                if travel <= 60:
+                    self._dispatch("OK")
+                elif travel >= 120:
+                    if abs(dx) >= abs(dy) * 1.3:
+                        self._dispatch("RIGHT" if dx > 0 else "LEFT")
+                    elif abs(dy) >= abs(dx) * 1.3:
+                        self._dispatch("DOWN" if dy > 0 else "UP")
         return super().handle__hidt(m)
 
-    # iOS 26 session hygiene copied from the Samsung bridge: don't answer common fetches with RPError.
     def handle_fetchsupportedactionsevent(self, m):
         trace("SESSION • FetchSupportedActionsEvent")
         self.send_response(m, {})
@@ -202,7 +211,7 @@ def run_server(identifier, name, generation):
     sg = hashlib.sha256(f"generation:runtime:{generation}:{identifier}".encode()).hexdigest()[:32]
     w = AndroidPairingWindow(state_dir / "pairing-window.json", identifier, sg)
     clients = AndroidPairedClients(state_dir / "paired-clients.json")
-    state = FakeCompanionState()
+    state = AndroidCompanionState()
     trace(f"STATE • {name} • PIN {PIN} • paired clients {clients.count()}")
     loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop); _LOOP = loop
     def factory(): return AndroidCompanionService(state, name=name, identifier=identifier, private_key=private_key, server_generation=sg, pairing_window=w, paired_clients=clients)
