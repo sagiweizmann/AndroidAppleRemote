@@ -1,24 +1,17 @@
 package com.sagi.appleremotebridge
 
 import android.accessibilityservice.AccessibilityService
-import android.app.Instrumentation
 import android.content.Context
 import android.media.AudioManager
-import android.os.Handler
-import android.os.Looper
 import android.view.KeyEvent
+import android.view.View
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import java.util.concurrent.Executors
 
 class RemoteAccessibilityService : AccessibilityService() {
     companion object {
         @Volatile private var instance: RemoteAccessibilityService? = null
-        private val keyExecutor = Executors.newSingleThreadExecutor()
-        fun dispatch(c: RemoteCommand): Boolean {
-            val service = instance ?: return false
-            return service.handle(c)
-        }
+        fun dispatch(c: RemoteCommand): Boolean = instance?.handle(c) ?: false
         fun isConnected(): Boolean = instance != null
     }
 
@@ -29,6 +22,7 @@ class RemoteAccessibilityService : AccessibilityService() {
             flags = flags or android.accessibilityservice.AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
         }
     }
+
     override fun onDestroy() { if (instance === this) instance = null; super.onDestroy() }
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {}
     override fun onInterrupt() {}
@@ -36,11 +30,11 @@ class RemoteAccessibilityService : AccessibilityService() {
     private fun handle(c: RemoteCommand): Boolean = when (c) {
         RemoteCommand.BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
         RemoteCommand.HOME -> performGlobalAction(GLOBAL_ACTION_HOME)
-        RemoteCommand.OK -> tvKey(KeyEvent.KEYCODE_DPAD_CENTER) || clickFocused()
-        RemoteCommand.UP -> tvKey(KeyEvent.KEYCODE_DPAD_UP)
-        RemoteCommand.DOWN -> tvKey(KeyEvent.KEYCODE_DPAD_DOWN)
-        RemoteCommand.LEFT -> tvKey(KeyEvent.KEYCODE_DPAD_LEFT)
-        RemoteCommand.RIGHT -> tvKey(KeyEvent.KEYCODE_DPAD_RIGHT)
+        RemoteCommand.OK -> clickFocused()
+        RemoteCommand.UP -> moveFocus(View.FOCUS_UP)
+        RemoteCommand.DOWN -> moveFocus(View.FOCUS_DOWN)
+        RemoteCommand.LEFT -> moveFocus(View.FOCUS_LEFT)
+        RemoteCommand.RIGHT -> moveFocus(View.FOCUS_RIGHT)
         RemoteCommand.PLAY_PAUSE -> mediaKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
         RemoteCommand.MEDIA_NEXT -> mediaKey(KeyEvent.KEYCODE_MEDIA_NEXT)
         RemoteCommand.MEDIA_PREVIOUS -> mediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS)
@@ -50,52 +44,61 @@ class RemoteAccessibilityService : AccessibilityService() {
         RemoteCommand.POWER -> if (android.os.Build.VERSION.SDK_INT >= 28) performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN) else false
     }
 
-    /* Android TV navigation is DPAD/key based. Accessibility focus walking does not move the
-       framework's real Leanback/Compose focus, so inject the same key events as the physical remote. */
-    private fun tvKey(code: Int): Boolean = try {
-        keyExecutor.execute {
-            try { Instrumentation().sendKeyDownUpSync(code) }
-            catch (_: Throwable) { Handler(Looper.getMainLooper()).post { fallbackFocusKey(code) } }
-        }
-        true
-    } catch (_: Throwable) { fallbackFocusKey(code) }
-
-    private fun fallbackFocusKey(code: Int): Boolean {
-        // Best-effort fallback for firmware which blocks Instrumentation key injection.
+    /* Android TV uses framework focus navigation. focusSearch follows the same directional focus
+       graph used by a physical DPAD remote, without privileged input-injection permissions. */
+    private fun moveFocus(direction: Int): Boolean {
         val root = rootInActiveWindow ?: return false
-        val focus = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        val current = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
             ?: root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+            ?: firstFocusable(root)
             ?: return false
-        return when (code) {
-            KeyEvent.KEYCODE_DPAD_CENTER -> focus.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            else -> false
+
+        val next = try { current.focusSearch(direction) } catch (_: Throwable) { null } ?: return false
+        val inputFocused = next.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+        val a11yFocused = next.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS)
+        return inputFocused || a11yFocused
+    }
+
+    private fun firstFocusable(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (node.isVisibleToUser && (node.isFocusable || node.isClickable)) return node
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            firstFocusable(child)?.let { return it }
         }
+        return null
     }
 
     private fun clickFocused(): Boolean {
         val root = rootInActiveWindow ?: return false
-        var n = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        var node = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
             ?: root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+            ?: firstFocusable(root)
             ?: return false
         while (true) {
-            if (n.isClickable && n.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
-            n = n.parent ?: break
+            if (node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+            node = node.parent ?: break
         }
         return false
     }
 
     private fun audio(): AudioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
     private fun volume(direction: Int): Boolean = try {
         val am = audio()
-        // STREAM_MUSIC is the normal Android TV media stream. FLAG_SHOW_UI mirrors a real volume key.
-        am.adjustStreamVolume(AudioManager.STREAM_MUSIC, direction, AudioManager.FLAG_SHOW_UI)
+        am.adjustSuggestedStreamVolume(direction, AudioManager.USE_DEFAULT_STREAM_TYPE, AudioManager.FLAG_SHOW_UI)
         true
     } catch (_: Throwable) {
-        try { audio().adjustSuggestedStreamVolume(direction, AudioManager.USE_DEFAULT_STREAM_TYPE, AudioManager.FLAG_SHOW_UI); true }
-        catch (_: Throwable) { false }
+        try {
+            audio().adjustStreamVolume(AudioManager.STREAM_MUSIC, direction, AudioManager.FLAG_SHOW_UI)
+            true
+        } catch (_: Throwable) { false }
     }
+
     private fun mediaKey(code: Int): Boolean = try {
-        val am = audio(); am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, code)); am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, code)); true
+        val am = audio()
+        am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, code))
+        am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, code))
+        true
     } catch (_: Throwable) { false }
 }
 
