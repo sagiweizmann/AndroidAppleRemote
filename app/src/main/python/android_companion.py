@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from java import jclass
 from atvr4samsung.companion.protocol.appletv import FakeCompanionService, FakeCompanionState
-from atvr4samsung.companion.protocol.enums import FrameType, TouchAction, KeyboardFocusState
+from atvr4samsung.companion.protocol.enums import FrameType, TouchAction, KeyboardFocusState, MediaControlCommand
 
 Bridge = jclass("com.sagi.appleremotebridge.CompanionPythonBridge")
 _LOOP = None
@@ -17,7 +17,7 @@ HID_TO_ANDROID = {
     1: "UP", 2: "DOWN", 3: "LEFT", 4: "RIGHT",
     5: "BACK", 6: "OK", 7: "HOME",
     8: "VOLUME_UP", 9: "VOLUME_DOWN",
-    14: "PLAY_PAUSE", 18: "MUTE", 19: "POWER",
+    14: "PLAY", 18: "MUTE", 19: "POWER",
 }
 
 
@@ -82,8 +82,6 @@ class AndroidPairedClients:
 class AndroidCompanionState(FakeCompanionState):
     def create_session(self, owner=None):
         session = super().create_session(owner)
-        # FakeCompanionState defaults RTI to Focused. That makes iOS show its text keyboard.
-        # A TV remote should start with no text-input focus so the touch surface stays a trackpad.
         session._rti_focus_state = KeyboardFocusState.Unfocused
         session.rti_text = None
         return session
@@ -99,6 +97,7 @@ class AndroidCompanionService(FakeCompanionService):
         self.cid = type(self)._seq
         self._android_touch_start = None
         self._rx = 0; self._tx = 0; self._last_ok = 0.0
+        self._ios_volume = float(getattr(state, "volume", 10.0)) / 100.0
 
     def _identity_reset_in_progress(self): return False
 
@@ -151,11 +150,38 @@ class AndroidCompanionService(FakeCompanionService):
         except Exception as e: trace(f"HID decode error • {type(e).__name__}: {e}")
 
     def handle__mcc(self, m):
+        c = m.get("_c", {})
+        try: mcc = MediaControlCommand(int(c.get("_mcc", -1)))
+        except Exception: mcc = None
+
+        # Capture SetVolume before the base mutates its synthetic volume state. iOS sends an absolute
+        # 0..1 value; Android TV needs steps, so emit one or more raises/lowers based on the delta.
+        if mcc == MediaControlCommand.SetVolume:
+            try:
+                new_level = max(0.0, min(1.0, float(c.get("_vol", self._ios_volume))))
+                delta = new_level - self._ios_volume
+                steps = max(1, min(8, int(abs(delta) * 20.0 + 0.5))) if abs(delta) > 0.01 else 0
+                cmd = "VOLUME_UP" if delta > 0 else "VOLUME_DOWN"
+                for _ in range(steps): self._dispatch(cmd)
+                self._ios_volume = new_level
+                trace(f"MEDIA • SetVolume {new_level:.2f} -> {cmd if steps else 'NOOP'} x{steps}")
+            except Exception as e: trace(f"MEDIA volume decode error • {type(e).__name__}: {e}")
+
         before = self.session.latest_button
         super().handle__mcc(m)
         after = self.session.latest_button
-        if after and after != before:
-            cmd = {"play":"PLAY_PAUSE", "pause":"PLAY_PAUSE", "next":"MEDIA_NEXT", "previous":"MEDIA_PREVIOUS"}.get(after)
+
+        if mcc == MediaControlCommand.Play:
+            self._dispatch("PLAY")
+        elif mcc == MediaControlCommand.Pause:
+            # User requested Play semantics rather than toggling Stop/Pause from the remote button.
+            trace("MEDIA • Pause ignored (Play-only mode)")
+        elif mcc == MediaControlCommand.NextTrack:
+            self._dispatch("MEDIA_NEXT")
+        elif mcc == MediaControlCommand.PreviousTrack:
+            self._dispatch("MEDIA_PREVIOUS")
+        elif after and after != before:
+            cmd = {"play":"PLAY", "next":"MEDIA_NEXT", "previous":"MEDIA_PREVIOUS"}.get(after)
             if cmd: self._dispatch(cmd)
 
     def handle__touchstart(self, m):
@@ -174,7 +200,6 @@ class AndroidCompanionService(FakeCompanionService):
     def handle__hidt(self, m):
         c = m.get("_c", {}); p = int(c.get("_tPh", -1)); x = int(c.get("_cx", 0)); y = int(c.get("_cy", 0))
         trace(f"TOUCH • phase={p} x={x} y={y}")
-        # Live iOS 26 phases from atvr4samsung: 1=press, 3=hold/move, 4=release, 5=click.
         if p == 1:
             self._android_touch_start = (x, y)
         elif p == 5:
