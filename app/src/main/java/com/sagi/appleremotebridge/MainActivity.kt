@@ -1,10 +1,7 @@
 package com.sagi.appleremotebridge
 
-import android.content.*
-import android.content.res.Configuration
-import android.graphics.Color
+import android.content.Intent
 import android.graphics.Rect
-import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -16,278 +13,301 @@ import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 
 class MainActivity : AppCompatActivity() {
-    private lateinit var status: TextView
-    private lateinit var errorBox: TextView
-    private lateinit var traceBox: TextView
+    private enum class Screen { HOME, SETTINGS, DEBUG }
+
     private lateinit var scroll: ScrollView
-    private lateinit var startButton: Button
+    private lateinit var content: LinearLayout
+    private lateinit var statusText: TextView
+    private var screen = Screen.HOME
     private var traceMode = false
-
-    private val dark: Boolean
-        get() = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
-
-    private val bg get() = if (dark) Color.rgb(13, 15, 20) else Color.rgb(242, 244, 248)
-    private val surface get() = if (dark) Color.rgb(25, 28, 35) else Color.WHITE
-    private val surfaceAlt get() = if (dark) Color.rgb(34, 38, 47) else Color.rgb(232, 235, 241)
-    private val textPrimary get() = if (dark) Color.WHITE else Color.rgb(20, 22, 26)
-    private val textSecondary get() = if (dark) Color.rgb(181, 188, 201) else Color.rgb(91, 98, 111)
-    private val accent get() = Color.rgb(87, 143, 255)
-    private val danger get() = Color.rgb(210, 73, 73)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         CrashReporter.install(this)
         CompanionPythonBridge.initialize(applicationContext)
         super.onCreate(savedInstanceState)
-        window.decorView.setBackgroundColor(bg)
-
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(54), dp(38), dp(54), dp(54))
-            isFocusable = false
-        }
 
         scroll = ScrollView(this).apply {
             isFocusable = false
-            isFillViewport = true
             descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
-            setBackgroundColor(bg)
+            isFillViewport = true
         }
-
-        val hero = card().apply {
+        content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(28), dp(24), dp(28), dp(24))
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(56), dp(44), dp(56), dp(32))
         }
-        hero.addView(TextView(this).apply {
-            text = "Apple Remote Bridge"
-            textSize = 30f
-            setTextColor(textPrimary)
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-        })
-        hero.addView(TextView(this).apply {
-            text = "Use the built-in iPhone Apple TV Remote with Android TV"
-            textSize = 16f
-            setTextColor(textSecondary)
-            setPadding(0, dp(8), 0, dp(4))
-        })
-        status = TextView(this).apply {
-            text = "Ready to start"
-            textSize = 16f
-            setTextColor(accent)
-            setPadding(0, dp(12), 0, 0)
-        }
-        hero.addView(status)
-        content.addView(hero, lp(match = true, top = 0, bottom = 22))
-
-        val controls = card().apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(22), dp(20), dp(22), dp(22))
-        }
-        controls.addView(sectionTitle("BRIDGE"))
-        startButton = tvButton("▶  Start bridge") { startBridge() }
-        val newIdentity = tvButton("↻  New random identity") {
-            try {
-                stopService(Intent(this, CompanionBridgeService::class.java))
-                val name = CompanionIdentity(this).rotate()
-                CompanionPythonBridge.clearTrace(); CrashReporter.clear(this)
-                status.text = "New identity: $name — restarting…"
-                android.os.Handler(mainLooper).postDelayed({ startBridge() }, 900)
-            } catch (e: Throwable) {
-                CrashReporter.save(this, "ROTATE IDENTITY", e)
-                status.text = "Identity reset failed: ${e.message}"
-            }
-        }
-        val accessibility = tvButton("⚙  Accessibility settings") {
-            try { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
-            catch (_: Throwable) { startActivity(Intent(Settings.ACTION_SETTINGS)) }
-        }
-        val stop = tvButton("■  Stop bridge", destructive = true) {
-            stopService(Intent(this, CompanionBridgeService::class.java))
-            status.text = "Bridge stopped"
-        }
-        controls.addView(startButton, lp(true, bottom = 10))
-        controls.addView(newIdentity, lp(true, bottom = 10))
-        controls.addView(accessibility, lp(true, bottom = 10))
-        controls.addView(stop, lp(true))
-        content.addView(controls, lp(true, bottom = 22))
-
-        val remote = card().apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(22), dp(20), dp(22), dp(22))
-        }
-        remote.addView(sectionTitle("REMOTE TEST"))
-        fun rb(label: String, command: RemoteCommand) = tvButton(label) {
-            status.text = if (RemoteAccessibilityService.dispatch(command)) "Sent: $label" else "Accessibility service not connected"
-        }
-        val up = rb("▲", RemoteCommand.UP)
-        val down = rb("▼", RemoteCommand.DOWN)
-        val left = rb("◀", RemoteCommand.LEFT)
-        val ok = rb("OK", RemoteCommand.OK)
-        val right = rb("▶", RemoteCommand.RIGHT)
-        remote.addView(centered(up), lp(true, bottom = 8))
-        remote.addView(horizontal(left, ok, right), lp(true, bottom = 8))
-        remote.addView(centered(down), lp(true, bottom = 16))
-        remote.addView(horizontal(rb("VOL +", RemoteCommand.VOLUME_UP), rb("MUTE", RemoteCommand.MUTE), rb("VOL −", RemoteCommand.VOLUME_DOWN)), lp(true, bottom = 8))
-        remote.addView(horizontal(rb("PLAY", RemoteCommand.PLAY), rb("BACK", RemoteCommand.BACK), rb("HOME", RemoteCommand.HOME)), lp(true))
-        content.addView(remote, lp(true, bottom = 22))
-
-        val diagnostics = card().apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(22), dp(20), dp(22), dp(22))
-        }
-        diagnostics.addView(sectionTitle("DIAGNOSTICS"))
-        val show = tvButton("Show pairing trace") {
-            refreshDiagnostics()
-            traceMode = true
-            status.text = "Trace mode • UP/DOWN scroll • OK/BACK exits"
-            scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
-        }
-        val clear = tvButton("Clear diagnostics") {
-            CrashReporter.clear(this)
-            CompanionPythonBridge.clearTrace()
-            refreshDiagnostics()
-        }
-        diagnostics.addView(horizontal(show, clear), lp(true, bottom = 14))
-
-        errorBox = TextView(this).apply {
-            textSize = 13f
-            setTextColor(textSecondary)
-            setPadding(dp(12), dp(10), dp(12), dp(10))
-        }
-        traceBox = TextView(this).apply {
-            textSize = 13f
-            setTextColor(textSecondary)
-            setPadding(dp(12), dp(10), dp(12), dp(10))
-            typeface = android.graphics.Typeface.MONOSPACE
-        }
-        diagnostics.addView(errorBox)
-        diagnostics.addView(traceBox)
-        content.addView(diagnostics, lp(true))
-
         scroll.addView(content, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         setContentView(scroll)
-        refreshDiagnostics()
-        startButton.requestFocus()
+        renderHome()
     }
 
-    private fun sectionTitle(label: String) = TextView(this).apply {
-        text = label
-        textSize = 13f
-        letterSpacing = .12f
-        setTextColor(textSecondary)
-        typeface = android.graphics.Typeface.DEFAULT_BOLD
-        setPadding(dp(4), 0, 0, dp(14))
-    }
+    private fun renderHome() {
+        screen = Screen.HOME
+        traceMode = false
+        content.removeAllViews()
 
-    private fun card() = LinearLayout(this).apply {
-        background = rounded(surface, 22f)
-        elevation = dp(4).toFloat()
-        isFocusable = false
-    }
+        title("Apple Remote Bridge")
+        subtitle("Use the built-in iPhone Apple TV Remote with Android TV")
 
-    private fun centered(view: View): LinearLayout = LinearLayout(this).apply {
-        gravity = Gravity.CENTER
-        addView(view, LinearLayout.LayoutParams(dp(180), dp(64)))
-    }
-
-    private fun horizontal(vararg views: View): LinearLayout = LinearLayout(this).apply {
-        orientation = LinearLayout.HORIZONTAL
-        gravity = Gravity.CENTER
-        views.forEachIndexed { index, v ->
-            addView(v, LinearLayout.LayoutParams(0, dp(64), 1f).apply {
-                if (index > 0) leftMargin = dp(8)
-            })
+        val identity = CompanionIdentity(this)
+        val card = section("YOUR TV")
+        card.addView(TextView(this).apply {
+            text = identity.deviceName
+            textSize = 24f
+            gravity = Gravity.CENTER
+            setPadding(dp(18), dp(20), dp(18), dp(8))
+        }, matchWrap())
+        statusText = TextView(this).apply {
+            text = if (RemoteAccessibilityService.isConnected()) "Accessibility ready" else "Accessibility permission required"
+            textSize = 16f
+            gravity = Gravity.CENTER
+            alpha = 0.75f
+            setPadding(dp(12), dp(4), dp(12), dp(20))
         }
+        card.addView(statusText, matchWrap())
+
+        val start = tvButton("Start Remote Bridge") { startBridge() }
+        val accessibility = tvButton("Enable Accessibility") { openAccessibility() }
+        val settings = tvButton("Settings") { renderSettings() }
+        val debug = tvButton("Debug & Advanced") { renderDebug() }
+        content.addView(start, matchWrap(dp(10)))
+        content.addView(accessibility, matchWrap(dp(10)))
+
+        val bottomRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        bottomRow.addView(settings, LinearLayout.LayoutParams(0, dp(64), 1f).apply { setMargins(0, dp(10), dp(6), dp(10)) })
+        bottomRow.addView(debug, LinearLayout.LayoutParams(0, dp(64), 1f).apply { setMargins(dp(6), dp(10), 0, dp(10)) })
+        content.addView(bottomRow, matchWrap())
+
+        spacer(26)
+        footer()
+        start.requestFocus()
     }
 
-    private fun tvButton(label: String, destructive: Boolean = false, action: () -> Unit) = Button(this).apply {
+    private fun renderSettings() {
+        screen = Screen.SETTINGS
+        traceMode = false
+        content.removeAllViews()
+        title("Settings")
+        subtitle("Changing the TV name creates a fresh pairing identity")
+
+        val identity = CompanionIdentity(this)
+        val box = section("DEVICE NAME")
+        val input = EditText(this).apply {
+            setText(identity.deviceName)
+            hint = "Living Room TV"
+            textSize = 20f
+            isSingleLine = true
+            setPadding(dp(20), dp(16), dp(20), dp(16))
+        }
+        box.addView(input, matchWrap(dp(8)))
+
+        val save = tvButton("Save name & create new identity") {
+            val name = input.text?.toString().orEmpty()
+            stopService(Intent(this, CompanionBridgeService::class.java))
+            val applied = CompanionIdentity(this).rotateTo(name)
+            CompanionPythonBridge.clearTrace()
+            CrashReporter.clear(this)
+            Toast.makeText(this, "New identity: $applied", Toast.LENGTH_SHORT).show()
+            android.os.Handler(mainLooper).postDelayed({ startBridge(); renderHome() }, 700)
+        }
+        val back = tvButton("Back") { renderHome() }
+        content.addView(save, matchWrap(dp(10)))
+        content.addView(back, matchWrap(dp(10)))
+        spacer(26)
+        footer()
+        input.requestFocus()
+    }
+
+    private fun renderDebug() {
+        screen = Screen.DEBUG
+        traceMode = false
+        content.removeAllViews()
+        title("Debug & Advanced")
+        subtitle("Pairing diagnostics and manual remote tests")
+
+        statusText = TextView(this).apply {
+            text = "Advanced tools"
+            textSize = 16f
+            gravity = Gravity.CENTER
+            alpha = 0.78f
+        }
+        content.addView(statusText, matchWrap(dp(8)))
+
+        val identity = CompanionIdentity(this)
+        val identityBox = section("IDENTITY")
+        identityBox.addView(TextView(this).apply {
+            text = "${identity.deviceName}\nGeneration ${identity.generation}"
+            textSize = 18f
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(14), dp(12), dp(14))
+        }, matchWrap())
+
+        val randomIdentity = tvButton("New random identity") {
+            stopService(Intent(this, CompanionBridgeService::class.java))
+            val name = CompanionIdentity(this).rotate()
+            CompanionPythonBridge.clearTrace(); CrashReporter.clear(this)
+            statusText.text = "New identity: $name"
+            android.os.Handler(mainLooper).postDelayed({ startBridge(); renderDebug() }, 700)
+        }
+        content.addView(randomIdentity, matchWrap(dp(8)))
+
+        sectionLabel("REMOTE TEST")
+        content.addView(remoteButton("▲ UP", RemoteCommand.UP), matchWrap(dp(5)))
+        val dpad = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        dpad.addView(remoteButton("◀ LEFT", RemoteCommand.LEFT), weightedButton())
+        dpad.addView(remoteButton("OK", RemoteCommand.OK), weightedButton())
+        dpad.addView(remoteButton("RIGHT ▶", RemoteCommand.RIGHT), weightedButton())
+        content.addView(dpad, matchWrap())
+        content.addView(remoteButton("▼ DOWN", RemoteCommand.DOWN), matchWrap(dp(5)))
+
+        val media = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        media.addView(remoteButton("VOL +", RemoteCommand.VOLUME_UP), weightedButton())
+        media.addView(remoteButton("PLAY", RemoteCommand.PLAY), weightedButton())
+        media.addView(remoteButton("VOL -", RemoteCommand.VOLUME_DOWN), weightedButton())
+        content.addView(media, matchWrap())
+        content.addView(remoteButton("MUTE", RemoteCommand.MUTE), matchWrap(dp(5)))
+
+        sectionLabel("DIAGNOSTICS")
+        val trace = tvButton("Open pairing trace") { showTrace() }
+        val clear = tvButton("Clear diagnostics") {
+            CrashReporter.clear(this); CompanionPythonBridge.clearTrace(); statusText.text = "Diagnostics cleared"
+        }
+        val accessibility = tvButton("Accessibility settings") { openAccessibility() }
+        val stop = tvButton("Stop bridge") { stopService(Intent(this, CompanionBridgeService::class.java)); statusText.text = "Bridge stopped" }
+        val back = tvButton("Back to app") { renderHome() }
+        listOf(trace, clear, accessibility, stop, back).forEach { content.addView(it, matchWrap(dp(7))) }
+        spacer(22)
+        footer()
+        randomIdentity.requestFocus()
+    }
+
+    private fun showTrace() {
+        traceMode = true
+        content.removeAllViews()
+        title("Pairing Trace")
+        subtitle("UP / DOWN scroll • OK or BACK returns")
+        val last = CrashReporter.read(this)
+        val trace = CompanionPythonBridge.getTrace()
+        content.addView(TextView(this).apply {
+            text = buildString {
+                if (!last.isNullOrBlank()) append("LAST ERROR\n$last\n\n")
+                append(if (trace.isBlank()) "No trace yet." else trace)
+            }
+            textSize = 15f
+            setPadding(dp(16), dp(16), dp(16), dp(16))
+            typeface = android.graphics.Typeface.MONOSPACE
+        }, matchWrap())
+        footer()
+        scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+    }
+
+    private fun remoteButton(label: String, command: RemoteCommand) = tvButton(label) {
+        statusText.text = if (RemoteAccessibilityService.dispatch(command)) "Sent $label" else "Accessibility service not connected"
+    }
+
+    private fun tvButton(label: String, action: () -> Unit) = Button(this).apply {
         text = label
-        textSize = 16f
+        textSize = 17f
         isAllCaps = false
         isFocusable = true
         isFocusableInTouchMode = true
-        setTextColor(textPrimary)
-        background = rounded(if (destructive) danger else surfaceAlt, 16f)
-        stateListAnimator = null
-        elevation = 0f
+        minHeight = dp(62)
+        setPadding(dp(18), dp(10), dp(18), dp(10))
         setOnClickListener { action() }
-        setOnFocusChangeListener { _, hasFocus ->
-            background = rounded(
-                when {
-                    hasFocus -> accent
-                    destructive -> danger
-                    else -> surfaceAlt
-                }, 16f
-            )
-            animate().scaleX(if (hasFocus) 1.045f else 1f).scaleY(if (hasFocus) 1.045f else 1f).setDuration(110).start()
-            if (hasFocus && !traceMode) scroll.post {
-                scroll.requestChildRectangleOnScreen(this, Rect(0, 0, width, height), true)
-            }
+        setOnFocusChangeListener { view, focused ->
+            view.animate().scaleX(if (focused) 1.045f else 1f).scaleY(if (focused) 1.045f else 1f).setDuration(110).start()
+            if (focused && !traceMode) scroll.post { scroll.requestChildRectangleOnScreen(view, Rect(0, 0, view.width, view.height), true) }
         }
     }
 
-    private fun rounded(color: Int, radiusDp: Float) = GradientDrawable().apply {
-        shape = GradientDrawable.RECTANGLE
-        cornerRadius = dp(radiusDp.toInt()).toFloat()
-        setColor(color)
+    private fun section(label: String): LinearLayout {
+        sectionLabel(label)
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(18), dp(10), dp(18), dp(10))
+            content.addView(this, matchWrap(dp(8)))
+        }
     }
 
-    private fun lp(match: Boolean = true, top: Int = 0, bottom: Int = 0) = LinearLayout.LayoutParams(
-        if (match) ViewGroup.LayoutParams.MATCH_PARENT else ViewGroup.LayoutParams.WRAP_CONTENT,
-        ViewGroup.LayoutParams.WRAP_CONTENT
-    ).apply {
-        topMargin = dp(top)
-        bottomMargin = dp(bottom)
+    private fun title(text: String) {
+        content.addView(TextView(this).apply {
+            this.text = text
+            textSize = 32f
+            gravity = Gravity.CENTER
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setPadding(0, dp(8), 0, dp(4))
+        }, matchWrap())
     }
 
+    private fun subtitle(text: String) {
+        content.addView(TextView(this).apply {
+            this.text = text
+            textSize = 17f
+            gravity = Gravity.CENTER
+            alpha = 0.72f
+            setPadding(dp(12), 0, dp(12), dp(22))
+        }, matchWrap())
+    }
+
+    private fun sectionLabel(text: String) {
+        content.addView(TextView(this).apply {
+            this.text = text
+            textSize = 14f
+            letterSpacing = .12f
+            alpha = 0.72f
+            setPadding(dp(4), dp(16), dp(4), dp(6))
+        }, matchWrap())
+    }
+
+    private fun footer() {
+        content.addView(TextView(this).apply {
+            text = "Built by Weizmann.ai"
+            textSize = 14f
+            gravity = Gravity.CENTER
+            alpha = 0.5f
+            setPadding(0, dp(12), 0, dp(12))
+        }, matchWrap())
+    }
+
+    private fun spacer(height: Int) = content.addView(Space(this), ViewGroup.LayoutParams(1, dp(height)))
+    private fun matchWrap(margin: Int = 0) = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, margin, 0, margin) }
+    private fun weightedButton() = LinearLayout.LayoutParams(0, dp(62), 1f).apply { setMargins(dp(5), dp(5), dp(5), dp(5)) }
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (event.action == KeyEvent.ACTION_DOWN && traceMode) {
-            when (event.keyCode) {
-                KeyEvent.KEYCODE_DPAD_DOWN -> { scroll.smoothScrollBy(0, dp(240)); return true }
-                KeyEvent.KEYCODE_DPAD_UP -> { scroll.smoothScrollBy(0, -dp(240)); return true }
-                KeyEvent.KEYCODE_DPAD_CENTER,
-                KeyEvent.KEYCODE_ENTER,
-                KeyEvent.KEYCODE_NUMPAD_ENTER,
-                KeyEvent.KEYCODE_BACK -> { exitTraceMode(); return true }
-            }
-        }
-        return super.dispatchKeyEvent(event)
-    }
-
-    private fun exitTraceMode() {
-        traceMode = false
-        scroll.smoothScrollTo(0, 0)
-        status.text = "Ready"
-        startButton.requestFocus()
-    }
-
-    @Deprecated("Deprecated in Java")
-    override fun onBackPressed() {
-        if (traceMode || scroll.scrollY > 0) exitTraceMode() else super.onBackPressed()
+    private fun openAccessibility() {
+        try { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+        catch (_: Throwable) { startActivity(Intent(Settings.ACTION_SETTINGS)) }
     }
 
     private fun startBridge() {
         try {
             val intent = Intent(this, CompanionBridgeService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
-            val i = CompanionIdentity(this)
-            status.text = "Starting ${i.deviceName}…"
+            if (::statusText.isInitialized) statusText.text = "Bridge running as ${CompanionIdentity(this).deviceName}"
         } catch (e: Throwable) {
             CrashReporter.save(this, "START SERVICE", e)
-            status.text = "Start failed: ${e.message}"
+            if (::statusText.isInitialized) statusText.text = "Start failed: ${e.message}"
         }
     }
 
-    override fun onResume() {
-        super.onResume()
-        if (::errorBox.isInitialized) refreshDiagnostics()
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (traceMode && event.action == KeyEvent.ACTION_DOWN) {
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_DPAD_DOWN -> { scroll.smoothScrollBy(0, dp(280)); return true }
+                KeyEvent.KEYCODE_DPAD_UP -> { scroll.smoothScrollBy(0, -dp(280)); return true }
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_BACK -> { renderDebug(); return true }
+            }
+        }
+        return super.dispatchKeyEvent(event)
     }
 
-    private fun refreshDiagnostics() {
-        val last = CrashReporter.read(this)
-        errorBox.text = if (last.isNullOrBlank()) "Last error: none" else "LAST ERROR:\n$last"
-        val t = CompanionPythonBridge.getTrace()
-        traceBox.text = if (t.isBlank()) "PAIRING TRACE: none" else "PAIRING TRACE:\n$t"
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        when {
+            traceMode -> renderDebug()
+            screen != Screen.HOME -> renderHome()
+            else -> super.onBackPressed()
+        }
     }
 }
