@@ -44,15 +44,12 @@ class RemoteAccessibilityService : AccessibilityService() {
         RemoteCommand.POWER -> if (android.os.Build.VERSION.SDK_INT >= 28) performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN) else false
     }
 
-    /* Android TV uses framework focus navigation. focusSearch follows the same directional focus
-       graph used by a physical DPAD remote, without privileged input-injection permissions. */
     private fun moveFocus(direction: Int): Boolean {
         val root = rootInActiveWindow ?: return false
         val current = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
             ?: root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
             ?: firstFocusable(root)
             ?: return false
-
         val next = try { current.focusSearch(direction) } catch (_: Throwable) { null } ?: return false
         val inputFocused = next.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
         val a11yFocused = next.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS)
@@ -83,15 +80,23 @@ class RemoteAccessibilityService : AccessibilityService() {
 
     private fun audio(): AudioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
-    private fun volume(direction: Int): Boolean = try {
+    private fun volume(direction: Int): Boolean {
         val am = audio()
-        am.adjustSuggestedStreamVolume(direction, AudioManager.USE_DEFAULT_STREAM_TYPE, AudioManager.FLAG_SHOW_UI)
-        true
-    } catch (_: Throwable) {
-        try {
-            audio().adjustStreamVolume(AudioManager.STREAM_MUSIC, direction, AudioManager.FLAG_SHOW_UI)
+        return try {
+            // Android TV exposes its main output through master/system volume on many firmwares.
+            am.adjustVolume(direction, AudioManager.FLAG_SHOW_UI)
             true
-        } catch (_: Throwable) { false }
+        } catch (_: Throwable) {
+            try {
+                am.adjustSuggestedStreamVolume(direction, AudioManager.USE_DEFAULT_STREAM_TYPE, AudioManager.FLAG_SHOW_UI)
+                true
+            } catch (_: Throwable) {
+                try {
+                    am.adjustStreamVolume(AudioManager.STREAM_MUSIC, direction, AudioManager.FLAG_SHOW_UI)
+                    true
+                } catch (_: Throwable) { false }
+            }
+        }
     }
 
     private fun mediaKey(code: Int): Boolean = try {
