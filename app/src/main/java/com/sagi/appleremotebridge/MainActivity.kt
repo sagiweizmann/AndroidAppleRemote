@@ -168,6 +168,7 @@ class MainActivity : AppCompatActivity() {
         content.addView(remoteButton("MUTE", RemoteCommand.MUTE), matchWrap(dp(5)))
 
         sectionLabel("DIAGNOSTICS")
+        val navDiag = tvButton("Show navigation diagnostics") { showNavigationDiagnostics() }
         val trace = tvButton("Open pairing trace") { showTrace() }
         val clear = tvButton("Clear diagnostics") {
             CrashReporter.clear(this); CompanionPythonBridge.clearTrace(); statusText.text = "Diagnostics cleared"
@@ -175,10 +176,34 @@ class MainActivity : AppCompatActivity() {
         val accessibility = tvButton("Accessibility settings") { openAccessibility() }
         val stop = tvButton("Stop bridge") { stopService(Intent(this, CompanionBridgeService::class.java)); statusText.text = "Bridge stopped" }
         val back = tvButton("Back to app") { renderHome() }
-        listOf(trace, clear, accessibility, stop, back).forEach { content.addView(it, matchWrap(dp(7))) }
+        listOf(navDiag, trace, clear, accessibility, stop, back).forEach { content.addView(it, matchWrap(dp(7))) }
         spacer(22)
         footer()
         randomIdentity.requestFocus()
+    }
+
+    private fun showNavigationDiagnostics() {
+        traceMode = true
+        content.removeAllViews()
+        title("Navigation Diagnostics")
+        subtitle("Shows exactly what Android did with the last navigation command")
+        content.addView(TextView(this).apply {
+            text = RemoteAccessibilityService.navigationDiagnostic()
+            textSize = 18f
+            setPadding(dp(18), dp(18), dp(18), dp(18))
+            typeface = android.graphics.Typeface.MONOSPACE
+        }, matchWrap(dp(8)))
+        content.addView(TextView(this).apply {
+            text = "Run LEFT / RIGHT / UP / DOWN / OK from the Debug screen or from the iPhone remote, then reopen this page."
+            textSize = 15f
+            gravity = Gravity.CENTER
+            alpha = 0.7f
+            setPadding(dp(14), dp(14), dp(14), dp(14))
+        }, matchWrap())
+        val back = tvButton("Back to Debug") { renderDebug() }
+        content.addView(back, matchWrap(dp(10)))
+        footer()
+        back.requestFocus()
     }
 
     private fun showTrace() {
@@ -296,7 +321,7 @@ class MainActivity : AppCompatActivity() {
             when (event.keyCode) {
                 KeyEvent.KEYCODE_DPAD_DOWN -> { scroll.smoothScrollBy(0, dp(280)); return true }
                 KeyEvent.KEYCODE_DPAD_UP -> { scroll.smoothScrollBy(0, -dp(280)); return true }
-                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_BACK -> { renderDebug(); return true }
+                KeyEvent.KEYCODE_BACK -> { renderDebug(); return true }
             }
         }
         return super.dispatchKeyEvent(event)
