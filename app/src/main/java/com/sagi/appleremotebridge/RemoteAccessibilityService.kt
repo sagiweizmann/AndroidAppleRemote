@@ -2,11 +2,13 @@ package com.sagi.appleremotebridge
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Context
+import android.graphics.Rect
 import android.media.AudioManager
 import android.view.KeyEvent
 import android.view.View
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import kotlin.math.abs
 
 class RemoteAccessibilityService : AccessibilityService() {
     companion object {
@@ -35,7 +37,7 @@ class RemoteAccessibilityService : AccessibilityService() {
         RemoteCommand.DOWN -> moveFocus(View.FOCUS_DOWN)
         RemoteCommand.LEFT -> moveFocus(View.FOCUS_LEFT)
         RemoteCommand.RIGHT -> moveFocus(View.FOCUS_RIGHT)
-        RemoteCommand.PLAY_PAUSE -> mediaKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+        RemoteCommand.PLAY -> mediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
         RemoteCommand.MEDIA_NEXT -> mediaKey(KeyEvent.KEYCODE_MEDIA_NEXT)
         RemoteCommand.MEDIA_PREVIOUS -> mediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS)
         RemoteCommand.VOLUME_UP -> volume(AudioManager.ADJUST_RAISE)
@@ -50,10 +52,42 @@ class RemoteAccessibilityService : AccessibilityService() {
             ?: root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
             ?: firstFocusable(root)
             ?: return false
-        val next = try { current.focusSearch(direction) } catch (_: Throwable) { null } ?: return false
+
+        val next = try { current.focusSearch(direction) } catch (_: Throwable) { null }
+            ?: spatialNeighbor(root, current, direction)
+            ?: return false
+
         val inputFocused = next.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
         val a11yFocused = next.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS)
         return inputFocused || a11yFocused
+    }
+
+    private fun spatialNeighbor(root: AccessibilityNodeInfo, current: AccessibilityNodeInfo, direction: Int): AccessibilityNodeInfo? {
+        val nodes = mutableListOf<AccessibilityNodeInfo>()
+        collectFocusable(root, nodes)
+        val cr = Rect().also(current::getBoundsInScreen)
+        val cx = cr.centerX(); val cy = cr.centerY()
+        return nodes.asSequence().filter { it != current }.mapNotNull { n ->
+            val r = Rect().also(n::getBoundsInScreen)
+            val dx = r.centerX() - cx; val dy = r.centerY() - cy
+            val valid = when (direction) {
+                View.FOCUS_UP -> dy < 0
+                View.FOCUS_DOWN -> dy > 0
+                View.FOCUS_LEFT -> dx < 0
+                View.FOCUS_RIGHT -> dx > 0
+                else -> false
+            }
+            if (!valid) null else {
+                val primary = if (direction == View.FOCUS_UP || direction == View.FOCUS_DOWN) abs(dy) else abs(dx)
+                val secondary = if (direction == View.FOCUS_UP || direction == View.FOCUS_DOWN) abs(dx) else abs(dy)
+                n to (primary * 1000L + secondary)
+            }
+        }.minByOrNull { it.second }?.first
+    }
+
+    private fun collectFocusable(node: AccessibilityNodeInfo, out: MutableList<AccessibilityNodeInfo>) {
+        if (node.isVisibleToUser && (node.isFocusable || node.isClickable)) out += node
+        for (i in 0 until node.childCount) node.getChild(i)?.let { collectFocusable(it, out) }
     }
 
     private fun firstFocusable(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
@@ -83,7 +117,6 @@ class RemoteAccessibilityService : AccessibilityService() {
     private fun volume(direction: Int): Boolean {
         val am = audio()
         return try {
-            // Android TV exposes its main output through master/system volume on many firmwares.
             am.adjustVolume(direction, AudioManager.FLAG_SHOW_UI)
             true
         } catch (_: Throwable) {
@@ -91,10 +124,8 @@ class RemoteAccessibilityService : AccessibilityService() {
                 am.adjustSuggestedStreamVolume(direction, AudioManager.USE_DEFAULT_STREAM_TYPE, AudioManager.FLAG_SHOW_UI)
                 true
             } catch (_: Throwable) {
-                try {
-                    am.adjustStreamVolume(AudioManager.STREAM_MUSIC, direction, AudioManager.FLAG_SHOW_UI)
-                    true
-                } catch (_: Throwable) { false }
+                try { am.adjustStreamVolume(AudioManager.STREAM_MUSIC, direction, AudioManager.FLAG_SHOW_UI); true }
+                catch (_: Throwable) { false }
             }
         }
     }
@@ -109,6 +140,6 @@ class RemoteAccessibilityService : AccessibilityService() {
 
 enum class RemoteCommand {
     UP, DOWN, LEFT, RIGHT, OK, BACK, HOME,
-    PLAY_PAUSE, MEDIA_NEXT, MEDIA_PREVIOUS,
+    PLAY, MEDIA_NEXT, MEDIA_PREVIOUS,
     VOLUME_UP, VOLUME_DOWN, MUTE, POWER
 }
