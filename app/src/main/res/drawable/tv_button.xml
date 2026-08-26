@@ -1,0 +1,23 @@
+<!-- Ten-foot UI: focus has to be obvious across a room, so the focused state is a
+     solid accent fill rather than a subtle outline. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true">
+        <shape android:shape="rectangle">
+            <corners android:radius="14dp" />
+            <solid android:color="@color/bg_focus" />
+        </shape>
+    </item>
+    <item android:state_pressed="true">
+        <shape android:shape="rectangle">
+            <corners android:radius="14dp" />
+            <solid android:color="@color/bg_focus" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <corners android:radius="14dp" />
+            <solid android:color="@color/bg_raised" />
+            <stroke android:width="1dp" android:color="@color/stroke" />
+        </shape>
+    </item>
+</selector>

@@ -1,0 +1,13 @@
+<!-- Tightly cropped remote for in-app use; the launcher glyph carries adaptive-icon padding. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="32dp" android:height="48dp"
+    android:viewportWidth="32" android:viewportHeight="48">
+    <path
+        android:pathData="M4,0 h24 a4,4 0 0 1 4,4 v40 a4,4 0 0 1 -4,4 h-24 a4,4 0 0 1 -4,-4 v-40 a4,4 0 0 1 4,-4 z"
+        android:fillColor="#E8EDF7" />
+    <path android:pathData="M16,12 m-9,0 a9,9 0 1 0 18,0 a9,9 0 1 0 -18,0 z" android:fillColor="#0D0F14" />
+    <path android:pathData="M16,12 m-5,0 a5,5 0 1 0 10,0 a5,5 0 1 0 -10,0 z" android:fillColor="#578FFF" />
+    <path android:pathData="M7,28 h18 v3 h-18 z" android:fillColor="#0D0F14" />
+    <path android:pathData="M7,35 h18 v3 h-18 z" android:fillColor="#0D0F14" />
+    <path android:pathData="M16,44 m-3,0 a3,3 0 1 0 6,0 a3,3 0 1 0 -6,0 z" android:fillColor="#0D0F14" />
+</vector>

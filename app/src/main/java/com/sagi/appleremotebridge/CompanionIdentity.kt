@@ -33,7 +33,7 @@ class CompanionIdentity(private val context: Context) {
         return name
     }
 
-    private fun newName(): String = "Xiaomi TV ${1000 + java.security.SecureRandom().nextInt(9000)}"
+    private fun newName(): String = "Android TV ${1000 + java.security.SecureRandom().nextInt(9000)}"
 
     private fun bytes(field: String): ByteArray = MessageDigest.getInstance("SHA-256")
         .digest("AndroidAppleRemote-Runtime-v1\u0000$generation\u0000$field\u0000$identifier".toByteArray())

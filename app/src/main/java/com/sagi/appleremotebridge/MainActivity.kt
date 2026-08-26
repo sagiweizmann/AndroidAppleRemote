@@ -34,8 +34,8 @@ class MainActivity : AppCompatActivity() {
         }
         content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(56), dp(44), dp(56), dp(32))
+            gravity = Gravity.CENTER_HORIZONTAL or Gravity.CENTER_VERTICAL
+            setPadding(dp(48), dp(28), dp(48), dp(24))
         }
         scroll.addView(content, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         setContentView(scroll)
@@ -47,42 +47,107 @@ class MainActivity : AppCompatActivity() {
         traceMode = false
         content.removeAllViews()
 
-        title("Apple Remote Bridge")
-        subtitle("Use the built-in iPhone Apple TV Remote with Android TV")
-
         val identity = CompanionIdentity(this)
-        val card = section("YOUR TV")
+        val ready = RemoteAccessibilityService.isConnected()
+
+        // Header: glyph beside the wordmark, left aligned so the eye lands in one place.
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        header.addView(ImageView(this).apply {
+            setImageResource(R.drawable.ic_remote)
+        }, LinearLayout.LayoutParams(dp(34), dp(51)).apply { setMargins(0, 0, dp(18), 0) })
+        val heading = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        heading.addView(TextView(this).apply {
+            text = "Apple Remote Bridge"
+            textSize = 30f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        }, matchWrap())
+        heading.addView(TextView(this).apply {
+            text = "Use the built-in iPhone Apple TV Remote with this TV"
+            textSize = 15f
+            alpha = 0.65f
+        }, matchWrap())
+        header.addView(heading, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        content.addView(header, matchWrap())
+
+        // Body: status card on the left, a 2x2 action grid on the right. Fixed height so the
+        // whole screen fits a 720p TV without ever scrolling.
+        val body = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        content.addView(body, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(250)).apply {
+            setMargins(0, dp(22), 0, dp(16))
+        })
+
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = getDrawable(R.drawable.tv_card)
+            setPadding(dp(26), dp(20), dp(26), dp(20))
+        }
+        body.addView(card, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1.15f).apply {
+            setMargins(0, 0, dp(16), 0)
+        })
+        card.addView(TextView(this).apply {
+            text = "THIS TV"
+            textSize = 13f
+            letterSpacing = .14f
+            alpha = 0.55f
+        }, matchWrap())
         card.addView(TextView(this).apply {
             text = identity.deviceName
-            textSize = 24f
-            gravity = Gravity.CENTER
-            setPadding(dp(18), dp(20), dp(18), dp(8))
+            textSize = 28f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setPadding(0, dp(8), 0, dp(14))
         }, matchWrap())
         statusText = TextView(this).apply {
-            text = if (RemoteAccessibilityService.isConnected()) "Accessibility ready" else "Accessibility permission required"
-            textSize = 16f
-            gravity = Gravity.CENTER
-            alpha = 0.75f
-            setPadding(dp(12), dp(4), dp(12), dp(20))
+            text = if (ready) "● Ready to pair" else "● Accessibility permission required"
+            textSize = 17f
+            setTextColor(getColor(if (ready) R.color.ok else R.color.warn))
         }
         card.addView(statusText, matchWrap())
+        card.addView(TextView(this).apply {
+            text = "Pairing PIN 1337"
+            textSize = 16f
+            alpha = 0.6f
+            setPadding(0, dp(10), 0, dp(18))
+        }, matchWrap())
+        card.addView(TextView(this).apply {
+            text = "On your iPhone:  Control Center  →  Apple TV Remote"
+            textSize = 15f
+            alpha = 0.5f
+        }, matchWrap())
 
-        val start = tvButton("Start Remote Bridge") { startBridge() }
-        val accessibility = tvButton("Enable Accessibility") { openAccessibility() }
+        val grid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        body.addView(grid, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+        val start = tvButton("Start bridge") { startBridge() }
+        val accessibility = tvButton("Accessibility") { openAccessibility() }
         val settings = tvButton("Settings") { renderSettings() }
-        val debug = tvButton("Debug & Advanced") { renderDebug() }
-        content.addView(start, matchWrap(dp(10)))
-        content.addView(accessibility, matchWrap(dp(10)))
+        val debug = tvButton("Debug") { renderDebug() }
+        grid.addView(tileRow(start, accessibility), tileRowParams(dp(8)))
+        grid.addView(tileRow(settings, debug), tileRowParams(0))
 
-        val bottomRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        bottomRow.addView(settings, LinearLayout.LayoutParams(0, dp(64), 1f).apply { setMargins(0, dp(10), dp(6), dp(10)) })
-        bottomRow.addView(debug, LinearLayout.LayoutParams(0, dp(64), 1f).apply { setMargins(dp(6), dp(10), 0, dp(10)) })
-        content.addView(bottomRow, matchWrap())
+        content.addView(TextView(this).apply {
+            text = "Built by Weizmann.ai"
+            textSize = 13f
+            alpha = 0.4f
+        }, matchWrap())
 
-        spacer(26)
-        footer()
-        start.requestFocus()
+        (if (ready) start else accessibility).requestFocus()
     }
+
+    private fun tileRow(left: View, right: View) = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        addView(left, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+            setMargins(0, 0, dp(8), 0)
+        })
+        addView(right, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+    }
+
+    private fun tileRowParams(bottom: Int) =
+        LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply {
+            setMargins(0, 0, 0, bottom)
+        }
 
     private fun renderSettings() {
         screen = Screen.SETTINGS
@@ -235,6 +300,9 @@ class MainActivity : AppCompatActivity() {
         text = label
         textSize = 17f
         isAllCaps = false
+        background = getDrawable(R.drawable.tv_button)
+        setTextColor(getColorStateList(R.color.tv_button_text))
+        stateListAnimator = null
         isFocusable = true
         isFocusableInTouchMode = true
         minHeight = dp(62)
@@ -251,7 +319,8 @@ class MainActivity : AppCompatActivity() {
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(18), dp(10), dp(18), dp(10))
+            background = getDrawable(R.drawable.tv_card)
+            setPadding(dp(18), dp(14), dp(18), dp(14))
             content.addView(this, matchWrap(dp(8)))
         }
     }
@@ -336,6 +405,14 @@ class MainActivity : AppCompatActivity() {
             CrashReporter.save(this, "START SERVICE", e)
             if (::statusText.isInitialized) statusText.text = "Start failed: ${e.message}"
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // The accessibility service connects asynchronously and after a trip to system
+        // Settings, so the home status would otherwise sit on a stale value until the
+        // user navigated away and back.
+        if (screen == Screen.HOME && !traceMode) renderHome()
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {

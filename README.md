@@ -6,6 +6,17 @@ Android Apple Remote Bridge makes an Android TV advertise itself as a compatible
 
 > No separate iPhone remote app is required. Open the Apple TV Remote from iOS Control Center and connect directly to your Android TV.
 
+<p align="center">
+  <img src="docs/screenshot-home.png" alt="Apple Remote Bridge home screen on Android TV" width="860">
+</p>
+
+<p align="center">
+  <img src="docs/icon.png" alt="App icon" width="88" hspace="14">
+  <img src="docs/banner.png" alt="Android TV launcher banner" width="300" hspace="14">
+</p>
+
+<p align="center"><sub>App icon and Android TV launcher banner</sub></p>
+
 ## Status
 
 The core Companion implementation is working:
@@ -69,14 +80,14 @@ The TV interface is designed for DPAD navigation and uses a permanent dark theme
 
 ### Home
 
-The main screen is intentionally simple and contains the controls needed for normal use:
+Everything needed for normal use sits on one screen, with no scrolling: a status card
+showing the Companion device name, readiness and pairing PIN, beside a four-tile grid.
 
-- Start Remote Bridge
-- Enable Accessibility
-- Settings
-- Debug & Advanced
-- Current Companion device name
-- Accessibility status
+- **Start bridge** / **Accessibility** / **Settings** / **Debug**
+- Colour-coded readiness: green once the Accessibility service is connected, amber until then
+- The pairing PIN and where to find the remote on the iPhone
+
+New installs advertise themselves as `Android TV <number>`; the name can be changed in Settings.
 
 ### Settings
 
@@ -141,13 +152,29 @@ Testing on additional devices is welcome, especially:
 
 ## Building
 
-The project is a standard Android/Gradle project and can be built with:
+The Companion protocol package is not checked in; CI vendors it at build time. Do the same
+once before building locally, and again after any `git clean`:
 
 ```bash
+./scripts/vendor-companion-protocol.sh
 ./gradlew assembleDebug
 ```
 
+Chaquopy needs a host Python matching the configured version (3.11). It is found automatically
+at the usual Homebrew locations, or point at it explicitly:
+
+```bash
+./gradlew assembleDebug -Pchaquopy.buildPython=/path/to/python3.11
+```
+
 GitHub Actions also builds APK artifacts for repository revisions.
+
+### Testing against an emulator
+
+An Android emulator sits behind the emulator's NAT, so its mDNS advertisement never reaches
+the LAN and the iPhone cannot connect to it. `scripts/emulator-companion-bridge.py` works
+around both: it re-advertises the service on the real network and relays TCP into the guest
+over `adb`.
 
 ## Privacy
 

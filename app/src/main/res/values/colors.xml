@@ -1,0 +1,12 @@
+<resources>
+    <color name="bg">#0D0F14</color>
+    <color name="icon_bg">#141A26</color>
+    <color name="bg_raised">#161B24</color>
+    <color name="bg_focus">#578FFF</color>
+    <color name="stroke">#2A3342</color>
+    <color name="glyph">#E8EDF7</color>
+    <color name="accent">#578FFF</color>
+    <color name="on_focus">#08121F</color>
+    <color name="ok">#4ED27A</color>
+    <color name="warn">#F0A93B</color>
+</resources>
