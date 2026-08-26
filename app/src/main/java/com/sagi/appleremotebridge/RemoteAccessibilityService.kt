@@ -16,8 +16,19 @@ import kotlin.math.abs
 class RemoteAccessibilityService : AccessibilityService() {
     companion object {
         @Volatile private var instance: RemoteAccessibilityService? = null
-        fun dispatch(c: RemoteCommand): Boolean = instance?.handle(c) ?: false
+        @Volatile private var lastNavigationDiagnostic: String = "No navigation test has run yet."
+
+        fun dispatch(c: RemoteCommand): Boolean = instance?.handle(c) ?: run {
+            setDiagnostic("Command: $c\nResult: Accessibility service is not connected")
+            false
+        }
         fun isConnected(): Boolean = instance != null
+        fun navigationDiagnostic(): String = buildString {
+            append("Accessibility connected: ").append(if (instance != null) "YES" else "NO")
+            append("\nAndroid SDK: ").append(Build.VERSION.SDK_INT)
+            append("\n\n").append(lastNavigationDiagnostic)
+        }
+        private fun setDiagnostic(text: String) { lastNavigationDiagnostic = text }
     }
 
     override fun onServiceConnected() {
@@ -26,11 +37,13 @@ class RemoteAccessibilityService : AccessibilityService() {
         serviceInfo = serviceInfo.apply {
             flags = flags or android.accessibilityservice.AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
         }
+        setDiagnostic("Accessibility service connected.\nWaiting for a navigation command.")
         CompanionPythonBridge.onStatus("A11Y • connected • sdk=${Build.VERSION.SDK_INT} • gestures=enabled")
     }
 
     override fun onDestroy() {
         if (instance === this) instance = null
+        setDiagnostic("Accessibility service disconnected.")
         CompanionPythonBridge.onStatus("A11Y • disconnected")
         super.onDestroy()
     }
@@ -55,6 +68,8 @@ class RemoteAccessibilityService : AccessibilityService() {
     }
 
     private fun navigateOrTap(command: RemoteCommand): Boolean {
+        setDiagnostic("Command: $command\nStarting navigation injection…")
+
         if (Build.VERSION.SDK_INT >= 33) {
             val action = when (command) {
                 RemoteCommand.UP -> GLOBAL_ACTION_DPAD_UP
@@ -66,12 +81,14 @@ class RemoteAccessibilityService : AccessibilityService() {
             }
             if (action != -1) {
                 val ok = performGlobalAction(action)
+                setDiagnostic("Command: $command\nMethod: Android system DPAD global action\nAccepted: $ok")
                 CompanionPythonBridge.onStatus("NAV • $command • system-dpad=$ok")
                 if (ok) return true
             }
         }
 
         val gestureAccepted = performNavigationGesture(command)
+        setDiagnostic("Command: $command\nMethod: Accessibility dispatchGesture\nAccepted by Android: $gestureAccepted\nWaiting for completion callback…")
         CompanionPythonBridge.onStatus("NAV • $command • gesture-accepted=$gestureAccepted")
         if (gestureAccepted) return true
 
@@ -84,6 +101,7 @@ class RemoteAccessibilityService : AccessibilityService() {
                 else -> View.FOCUS_FORWARD
             }
         )
+        setDiagnostic("Command: $command\nMethod: Accessibility node focus fallback\nResult: $fallback\nGesture was rejected before fallback.")
         CompanionPythonBridge.onStatus("NAV • $command • node-fallback=$fallback")
         return fallback
     }
@@ -92,7 +110,10 @@ class RemoteAccessibilityService : AccessibilityService() {
         val dm = resources.displayMetrics
         val w = dm.widthPixels.toFloat()
         val h = dm.heightPixels.toFloat()
-        if (w <= 0f || h <= 0f) return false
+        if (w <= 0f || h <= 0f) {
+            setDiagnostic("Command: $command\nMethod: Accessibility gesture\nResult: FAILED\nReason: invalid display size ${w.toInt()}x${h.toInt()}")
+            return false
+        }
 
         val cx = w * 0.5f
         val cy = h * 0.5f
@@ -107,9 +128,11 @@ class RemoteAccessibilityService : AccessibilityService() {
                 .build()
             return dispatchGesture(gesture, object : GestureResultCallback() {
                 override fun onCompleted(gestureDescription: GestureDescription?) {
+                    setDiagnostic("Command: OK\nMethod: Accessibility dispatchGesture (center tap)\nAccepted: YES\nCallback: COMPLETED")
                     CompanionPythonBridge.onStatus("NAV • OK • gesture-completed")
                 }
                 override fun onCancelled(gestureDescription: GestureDescription?) {
+                    setDiagnostic("Command: OK\nMethod: Accessibility dispatchGesture (center tap)\nAccepted: YES\nCallback: CANCELLED")
                     CompanionPythonBridge.onStatus("NAV • OK • gesture-cancelled")
                 }
             }, null)
@@ -133,9 +156,11 @@ class RemoteAccessibilityService : AccessibilityService() {
             .build()
         return dispatchGesture(gesture, object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
+                setDiagnostic("Command: $command\nMethod: Accessibility dispatchGesture (swipe)\nDisplay: ${w.toInt()}x${h.toInt()}\nFrom: ${cx.toInt()},${cy.toInt()}\nTo: ${endX.toInt()},${endY.toInt()}\nAccepted: YES\nCallback: COMPLETED")
                 CompanionPythonBridge.onStatus("NAV • $command • gesture-completed")
             }
             override fun onCancelled(gestureDescription: GestureDescription?) {
+                setDiagnostic("Command: $command\nMethod: Accessibility dispatchGesture (swipe)\nDisplay: ${w.toInt()}x${h.toInt()}\nAccepted: YES\nCallback: CANCELLED")
                 CompanionPythonBridge.onStatus("NAV • $command • gesture-cancelled")
             }
         }, null)
