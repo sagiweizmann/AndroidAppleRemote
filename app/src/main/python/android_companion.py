@@ -20,6 +20,15 @@ HID_TO_ANDROID = {
     14: "PLAY_PAUSE", 18: "MUTE", 19: "POWER",
 }
 
+# iOS streams touchpad swipes as a run of _tPh=2 "moved" frames and frequently
+# never sends a Release, so each navigation step is emitted from the move stream
+# and the anchor is reset behind it. _tPh=2 is also absent from upstream's
+# TouchAction enum, so it must never reach super().handle__hidt().
+TOUCH_STEP_FRACTION = 0.07   # of the smaller touchpad dimension
+TOUCH_STEP_FALLBACK = 70     # touch units, when the touchpad size is unknown
+TOUCH_TAP_TRAVEL = 40        # a gesture that never travels past this is a tap
+
+
 def trace(m):
     try: Bridge.onStatus(m)
     except Exception: pass
@@ -84,7 +93,7 @@ class AndroidCompanionService(FakeCompanionService):
     def __init__(self, state, *, name, identifier, private_key, server_generation, pairing_window, paired_clients):
         super().__init__(state, device_name=name, unique_id=identifier, private_key=private_key, server_identity_generation=server_generation, paired_clients=paired_clients, require_paired=True, pairing_window=pairing_window)
         type(self)._seq += 1; self.cid = type(self)._seq
-        self._android_touch_start = None; self._rx = 0; self._tx = 0; self._last_ok = 0.0
+        self._touch_anchor = None; self._touch_steps = 0; self._rx = 0; self._tx = 0; self._last_ok = 0.0
         self._ios_volume = float(getattr(state, "volume", 10.0)) / 100.0
     def _identity_reset_in_progress(self): return False
     def connection_made(self, t): trace(f"TCP #{self.cid} CONNECT • {t.get_extra_info('peername')}"); return super().connection_made(t)
@@ -136,21 +145,40 @@ class AndroidCompanionService(FakeCompanionService):
         try:
             c = m.get("_c", {}); self.session.touch_width = int(c.get("_width", 0)); self.session.touch_height = int(c.get("_height", 0))
         except Exception: pass
-        self._android_touch_start = None; trace("SESSION • _touchStart -> touch device id 1"); self.send_response(m, {"_i": 1})
-    def handle__touchstop(self, m): self._android_touch_start = None; return super().handle__touchstop(m)
+        self._touch_anchor = None; self._touch_steps = 0
+        trace(f"SESSION • _touchStart -> pad {self.session.touch_width}x{self.session.touch_height} • step {self._touch_step()} • touch device id 1")
+        self.send_response(m, {"_i": 1})
+    def handle__touchstop(self, m):
+        self._touch_anchor = None; self._touch_steps = 0; return super().handle__touchstop(m)
+    def _touch_step(self):
+        pad = min(int(getattr(self.session, "touch_width", 0) or 0), int(getattr(self.session, "touch_height", 0) or 0))
+        return max(TOUCH_TAP_TRAVEL, int(pad * TOUCH_STEP_FRACTION)) if pad > 0 else TOUCH_STEP_FALLBACK
+    def _swipe_step(self, x, y):
+        q = self._touch_anchor
+        if q is None: self._touch_anchor = (x, y); return
+        dx, dy = x - q[0], y - q[1]
+        if max(abs(dx), abs(dy)) < self._touch_step(): return
+        cmd = ("RIGHT" if dx > 0 else "LEFT") if abs(dx) >= abs(dy) else ("DOWN" if dy > 0 else "UP")
+        trace(f"TOUCH • step {cmd} • d=({dx},{dy})"); self._dispatch(cmd)
+        self._touch_steps += 1; self._touch_anchor = (x, y)
     def handle__hidt(self, m):
         c = m.get("_c", {}); p = int(c.get("_tPh", -1)); x = int(c.get("_cx", 0)); y = int(c.get("_cy", 0)); trace(f"TOUCH • phase={p} x={x} y={y}")
-        if p == 1: self._android_touch_start = (x, y)
-        elif p == 5: self._dispatch("OK"); self._android_touch_start = None
-        elif p == 4:
-            q = self._android_touch_start; self._android_touch_start = None
-            if q:
-                dx, dy = x - q[0], y - q[1]; travel = max(abs(dx), abs(dy))
-                if travel <= 60: self._dispatch("OK")
-                elif travel >= 120:
-                    if abs(dx) >= abs(dy) * 1.3: self._dispatch("RIGHT" if dx > 0 else "LEFT")
-                    elif abs(dy) >= abs(dx) * 1.3: self._dispatch("DOWN" if dy > 0 else "UP")
-        return super().handle__hidt(m)
+        if p == 1:                                     # Press
+            self._touch_anchor = (x, y); self._touch_steps = 0
+        elif p in (2, 3):                              # moved / Hold
+            self._swipe_step(x, y)
+        elif p == 4:                                   # Release: a tap only if nothing moved
+            q = self._touch_anchor; steps = self._touch_steps
+            self._touch_anchor = None; self._touch_steps = 0
+            if q and not steps and max(abs(x - q[0]), abs(y - q[1])) <= TOUCH_TAP_TRAVEL: self._dispatch("OK")
+        elif p == 5:                                   # Click
+            self._dispatch("OK"); self._touch_anchor = None; self._touch_steps = 0
+        # Only phases in upstream's TouchAction enum may reach super(); TouchAction(2)
+        # raises there, and three such frames trip MALFORMED_FRAME_LIMIT and close the session.
+        if p in (1, 3, 4, 5):
+            try: return super().handle__hidt(m)
+            except Exception as e: trace(f"TOUCH • super error • {type(e).__name__}: {e}")
+        return None
     def handle_fetchsupportedactionsevent(self, m): trace("SESSION • FetchSupportedActionsEvent"); self.send_response(m, {})
     def handle_fetchmediacontrolstatus(self, m): trace("SESSION • FetchMediaControlStatus -> volume supported"); self.send_response(m, {"MediaControlFlags": 256})
 

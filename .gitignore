@@ -1,0 +1,13 @@
+# Build output
+/build/
+/app/build/
+/.gradle/
+
+# IDE / machine-local
+/.idea/
+/local.properties
+*.iml
+
+# Vendored at build time by scripts/vendor-companion-protocol.sh (and by CI).
+/app/src/main/python/atvr4samsung/
+/app/src/main/assets/licenses/
