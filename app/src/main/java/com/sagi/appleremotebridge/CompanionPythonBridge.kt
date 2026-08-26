@@ -9,48 +9,35 @@ object CompanionPythonBridge {
     private const val PREFS = "companion_trace"
     private const val KEY_TRACE = "trace"
 
-    @Volatile
-    private var appContext: Context? = null
+    @Volatile private var appContext: Context? = null
+    @Volatile var onReady: ((Int) -> Unit)? = null
+    @Volatile var onStatusChanged: ((String) -> Unit)? = null
 
-    @Volatile
-    var onReady: ((Int) -> Unit)? = null
+    fun initialize(context: Context) { appContext = context.applicationContext }
 
-    @Volatile
-    var onStatusChanged: ((String) -> Unit)? = null
-
-    fun initialize(context: Context) {
-        appContext = context.applicationContext
-    }
-
-    @JvmStatic
-    fun getStateDir(): String {
+    @JvmStatic fun getStateDir(): String {
         val context = appContext ?: error("CompanionPythonBridge not initialized")
         return context.filesDir.absolutePath
     }
 
-    @JvmStatic
-    fun onServerReady(port: Int) {
+    @JvmStatic fun onServerReady(port: Int) {
         Log.i(TAG, "Companion Python server ready on $port")
         appendTrace("SERVER READY • port $port")
         onReady?.invoke(port)
     }
 
-    @JvmStatic
-    fun onStatus(message: String) {
+    @JvmStatic fun onStatus(message: String) {
         Log.i(TAG, message)
         appendTrace(message)
         onStatusChanged?.invoke(message)
     }
 
-    @JvmStatic
-    fun clearTrace() {
+    @JvmStatic fun clearTrace() {
         appContext?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)?.edit()?.remove(KEY_TRACE)?.apply()
     }
 
-    @JvmStatic
-    fun getTrace(): String {
-        return appContext?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)?.getString(KEY_TRACE, "") ?: ""
-    }
+    @JvmStatic fun getTrace(): String =
+        appContext?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)?.getString(KEY_TRACE, "") ?: ""
 
     private fun appendTrace(message: String) {
         val context = appContext ?: return
@@ -58,12 +45,10 @@ object CompanionPythonBridge {
         val previous = prefs.getString(KEY_TRACE, "") ?: ""
         val line = "${System.currentTimeMillis()} • $message"
         val combined = if (previous.isBlank()) line else "$previous\n$line"
-        val trimmed = combined.takeLast(12000)
-        prefs.edit().putString(KEY_TRACE, trimmed).apply()
+        prefs.edit().putString(KEY_TRACE, combined.takeLast(12000)).apply()
     }
 
-    @JvmStatic
-    fun dispatch(command: String): Boolean {
+    @JvmStatic fun dispatch(command: String): Boolean {
         val remote = when (command.uppercase()) {
             "UP" -> RemoteCommand.UP
             "DOWN" -> RemoteCommand.DOWN
@@ -72,7 +57,13 @@ object CompanionPythonBridge {
             "OK", "SELECT" -> RemoteCommand.OK
             "BACK", "MENU" -> RemoteCommand.BACK
             "HOME" -> RemoteCommand.HOME
-            "PLAY_PAUSE", "PLAY", "PAUSE" -> RemoteCommand.PLAY_PAUSE
+            "PLAY_PAUSE", "PLAY", "PAUSE" -> RemoteCommand.PLAY
+            "MEDIA_NEXT", "NEXT" -> RemoteCommand.MEDIA_NEXT
+            "MEDIA_PREVIOUS", "PREVIOUS" -> RemoteCommand.MEDIA_PREVIOUS
+            "VOLUME_UP" -> RemoteCommand.VOLUME_UP
+            "VOLUME_DOWN" -> RemoteCommand.VOLUME_DOWN
+            "MUTE" -> RemoteCommand.MUTE
+            "POWER" -> RemoteCommand.POWER
             else -> null
         }
         if (remote == null) {
