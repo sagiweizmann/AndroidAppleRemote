@@ -77,56 +77,92 @@ class RemoteAccessibilityService : AccessibilityService() {
 
     private fun moveLogical(direction: Int, label: String): Boolean {
         val root = rootInActiveWindow ?: run {
-            setNavDiagnostic("Command: $label\nMethod: FocusController-only\nResult: FAILED\nrootInActiveWindow=null")
+            setNavDiagnostic("Command: $label\nResult: FAILED\nrootInActiveWindow=null")
             return false
         }
 
         val nodes = mutableListOf<AccessibilityNodeInfo>()
         collectFocusable(root, nodes)
-        if (nodes.isEmpty()) {
-            setNavDiagnostic("Command: $label\nMethod: FocusController-only\nResult: FAILED\nFocusable nodes=0")
-            return false
-        }
-
         val current = resolveCurrent(root, nodes)
-        if (current == null) {
-            val initial = chooseInitial(nodes, direction)
-            val accepted = focusNode(initial)
-            logicalCurrent = signature(initial)
-            setNavDiagnostic(
-                "Command: $label\nMethod: FocusController-only\nFocusable nodes: ${nodes.size}\n" +
-                    "Before: NONE\nTarget: ${describe(initial)}\nACTION_FOCUS accepted: $accepted"
-            )
-            CompanionPythonBridge.onStatus("NAV • $label • focus-controller initial=$accepted")
-            return accepted
+        val before = current?.let(::signature)
+
+        // 1. The app's own focus machinery knows its focus order - nextFocusLeft, custom
+        //    RecyclerView focus search - far better than geometry can infer it.
+        val searched = current?.let { try { it.focusSearch(direction) } catch (_: Throwable) { null } }
+        if (searched != null && focusNode(searched) && focusMoved(before)) {
+            logicalCurrent = signature(searched)
+            return report(label, "focusSearch", nodes.size, current, searched, true)
         }
 
-        val target = chooseDirectional(nodes, current, direction)
-        if (target == null) {
-            setNavDiagnostic(
-                "Command: $label\nMethod: FocusController-only\nFocusable nodes: ${nodes.size}\n" +
-                    "Before: ${describe(current)}\nTarget: NONE\nResult: edge/no candidate"
-            )
-            CompanionPythonBridge.onStatus("NAV • $label • focus-controller target=none")
-            return false
+        // 2. Geometric pick, for UIs that expose no usable focus order.
+        val target = if (current == null) chooseInitial(nodes, direction)
+                     else chooseDirectional(nodes, current, direction)
+        if (target != null && focusNode(target) && focusMoved(before)) {
+            logicalCurrent = signature(target)
+            return report(label, "geometric", nodes.size, current, target, true)
         }
 
-        val before = describe(current)
-        val accepted = focusNode(target)
-        if (accepted) logicalCurrent = signature(target)
-        val freshRoot = rootInActiveWindow
-        val freshNodes = mutableListOf<AccessibilityNodeInfo>()
-        if (freshRoot != null) collectFocusable(freshRoot, freshNodes)
-        val after = if (freshRoot != null) resolveCurrent(freshRoot, freshNodes) else null
-        val reached = after != null && sameNode(after, target)
+        // 3. TV rows are RecyclerViews that own their focus, so ACTION_FOCUS on an item that
+        //    has been recycled or is not laid out yet is accepted and then ignored - which is
+        //    why LEFT along a row almost always reported reached=false. Scrolling the
+        //    container itself moves the row. This is a semantic scroll action, not the
+        //    dispatchGesture synthetic-touch fallback that was removed earlier.
+        if (scrollInDirection(current ?: root, direction)) {
+            logicalCurrent = null
+            return report(label, "scroll", nodes.size, current, null, true)
+        }
 
+        return report(label, "exhausted", nodes.size, current, target, false)
+    }
+
+    private fun focusMoved(before: NodeSignature?): Boolean {
+        // performAction() reports delivery, not effect. Only a changed input focus counts.
+        val root = rootInActiveWindow ?: return false
+        val now = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.let(::signature) ?: return false
+        return now != before
+    }
+
+    private fun scrollInDirection(from: AccessibilityNodeInfo, direction: Int): Boolean {
+        val action = when (direction) {
+            View.FOCUS_LEFT -> AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_LEFT
+            View.FOCUS_RIGHT -> AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_RIGHT
+            View.FOCUS_UP -> AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP
+            View.FOCUS_DOWN -> AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN
+            else -> return false
+        }
+        val backward = direction == View.FOCUS_LEFT || direction == View.FOCUS_UP
+        var node: AccessibilityNodeInfo? = from
+        var depth = 0
+        while (node != null && depth < 12) {
+            try {
+                if (node.actionList.contains(action) && node.performAction(action.id)) return true
+                if (node.isScrollable) {
+                    val legacy = if (backward) AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+                                 else AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+                    if (node.performAction(legacy)) return true
+                }
+            } catch (_: Throwable) {}
+            node = node.parent
+            depth++
+        }
+        return false
+    }
+
+    private fun report(
+        label: String,
+        method: String,
+        nodeCount: Int,
+        before: AccessibilityNodeInfo?,
+        target: AccessibilityNodeInfo?,
+        moved: Boolean
+    ): Boolean {
         setNavDiagnostic(
-            "Command: $label\nMethod: FocusController-only\nFocusable nodes: ${nodes.size}\n" +
-                "Before: $before\nTarget: ${describe(target)}\nAfter: ${after?.let(::describe) ?: "NONE"}\n" +
-                "ACTION_FOCUS accepted: $accepted\nReached target: $reached"
+            "Command: $label\nMethod: $method\nFocusable nodes: $nodeCount\n" +
+                "Before: ${before?.let(::describe) ?: "NONE"}\n" +
+                "Target: ${target?.let(::describe) ?: "NONE"}\nFocus moved: $moved"
         )
-        CompanionPythonBridge.onStatus("NAV • $label • focus-controller accepted=$accepted reached=$reached")
-        return accepted
+        CompanionPythonBridge.onStatus("NAV • $label • $method • moved=$moved")
+        return moved
     }
 
     private fun clickLogicalCurrent(): Boolean {
