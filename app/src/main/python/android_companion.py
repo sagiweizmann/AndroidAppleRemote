@@ -24,8 +24,14 @@ HID_TO_ANDROID = {
 # never sends a Release, so each navigation step is emitted from the move stream
 # and the anchor is reset behind it. _tPh=2 is also absent from upstream's
 # TouchAction enum, so it must never reach super().handle__hidt().
-TOUCH_STEP_FRACTION = 0.07   # of the smaller touchpad dimension
-TOUCH_STEP_FALLBACK = 70     # touch units, when the touchpad size is unknown
+# A flick crosses the first threshold once; every further step inside the same
+# gesture needs a much longer pull, so a normal swipe moves one item and only a
+# deliberate drag moves more. Fractions are of the smaller touchpad dimension,
+# with fallbacks for when _touchStart does not report a usable size.
+TOUCH_STEP_FRACTION = 0.07
+TOUCH_STEP_FALLBACK = 70
+TOUCH_REPEAT_FRACTION = 0.40
+TOUCH_REPEAT_FALLBACK = 400
 TOUCH_TAP_TRAVEL = 40        # a gesture that never travels past this is a tap
 
 
@@ -93,7 +99,7 @@ class AndroidCompanionService(FakeCompanionService):
     def __init__(self, state, *, name, identifier, private_key, server_generation, pairing_window, paired_clients):
         super().__init__(state, device_name=name, unique_id=identifier, private_key=private_key, server_identity_generation=server_generation, paired_clients=paired_clients, require_paired=True, pairing_window=pairing_window)
         type(self)._seq += 1; self.cid = type(self)._seq
-        self._touch_anchor = None; self._touch_steps = 0; self._rx = 0; self._tx = 0; self._last_ok = 0.0
+        self._touch_anchor = None; self._touch_steps = 0; self._touch_axis = None; self._rx = 0; self._tx = 0; self._last_ok = 0.0
         self._ios_volume = float(getattr(state, "volume", 10.0)) / 100.0
     def _identity_reset_in_progress(self): return False
     def connection_made(self, t): trace(f"TCP #{self.cid} CONNECT • {t.get_extra_info('peername')}"); return super().connection_made(t)
@@ -145,34 +151,40 @@ class AndroidCompanionService(FakeCompanionService):
         try:
             c = m.get("_c", {}); self.session.touch_width = int(c.get("_width", 0)); self.session.touch_height = int(c.get("_height", 0))
         except Exception: pass
-        self._touch_anchor = None; self._touch_steps = 0
-        trace(f"SESSION • _touchStart -> pad {self.session.touch_width}x{self.session.touch_height} • step {self._touch_step()} • touch device id 1")
+        self._reset_gesture()
+        trace(f"SESSION • _touchStart -> pad {self.session.touch_width}x{self.session.touch_height} • step {self._touch_step(True)}/{self._touch_step(False)} • touch device id 1")
         self.send_response(m, {"_i": 1})
     def handle__touchstop(self, m):
-        self._touch_anchor = None; self._touch_steps = 0; return super().handle__touchstop(m)
-    def _touch_step(self):
+        self._reset_gesture(); return super().handle__touchstop(m)
+    def _reset_gesture(self, anchor=None):
+        self._touch_anchor = anchor; self._touch_steps = 0; self._touch_axis = None
+    def _touch_step(self, first):
         pad = min(int(getattr(self.session, "touch_width", 0) or 0), int(getattr(self.session, "touch_height", 0) or 0))
-        return max(TOUCH_TAP_TRAVEL, int(pad * TOUCH_STEP_FRACTION)) if pad > 0 else TOUCH_STEP_FALLBACK
+        frac, fallback = (TOUCH_STEP_FRACTION, TOUCH_STEP_FALLBACK) if first else (TOUCH_REPEAT_FRACTION, TOUCH_REPEAT_FALLBACK)
+        return max(TOUCH_TAP_TRAVEL, int(pad * frac)) if pad > 0 else fallback
     def _swipe_step(self, x, y):
         q = self._touch_anchor
         if q is None: self._touch_anchor = (x, y); return
         dx, dy = x - q[0], y - q[1]
-        if max(abs(dx), abs(dy)) < self._touch_step(): return
-        cmd = ("RIGHT" if dx > 0 else "LEFT") if abs(dx) >= abs(dy) else ("DOWN" if dy > 0 else "UP")
-        trace(f"TOUCH • step {cmd} • d=({dx},{dy})"); self._dispatch(cmd)
-        self._touch_steps += 1; self._touch_anchor = (x, y)
+        # Lock the axis on the first step so cross-axis wobble later in a long
+        # swipe cannot turn a vertical drag into a stray LEFT/RIGHT.
+        axis = self._touch_axis or ("h" if abs(dx) >= abs(dy) else "v")
+        if (abs(dx) if axis == "h" else abs(dy)) < self._touch_step(not self._touch_steps): return
+        cmd = ("RIGHT" if dx > 0 else "LEFT") if axis == "h" else ("DOWN" if dy > 0 else "UP")
+        self._touch_steps += 1; self._touch_axis = axis; self._touch_anchor = (x, y)
+        trace(f"TOUCH • step {cmd} #{self._touch_steps} • d=({dx},{dy}) axis={axis}"); self._dispatch(cmd)
     def handle__hidt(self, m):
         c = m.get("_c", {}); p = int(c.get("_tPh", -1)); x = int(c.get("_cx", 0)); y = int(c.get("_cy", 0)); trace(f"TOUCH • phase={p} x={x} y={y}")
         if p == 1:                                     # Press
-            self._touch_anchor = (x, y); self._touch_steps = 0
+            self._reset_gesture((x, y))
         elif p in (2, 3):                              # moved / Hold
             self._swipe_step(x, y)
         elif p == 4:                                   # Release: a tap only if nothing moved
             q = self._touch_anchor; steps = self._touch_steps
-            self._touch_anchor = None; self._touch_steps = 0
+            self._reset_gesture()
             if q and not steps and max(abs(x - q[0]), abs(y - q[1])) <= TOUCH_TAP_TRAVEL: self._dispatch("OK")
         elif p == 5:                                   # Click
-            self._dispatch("OK"); self._touch_anchor = None; self._touch_steps = 0
+            self._reset_gesture(); self._dispatch("OK")
         # Only phases in upstream's TouchAction enum may reach super(); TouchAction(2)
         # raises there, and three such frames trip MALFORMED_FRAME_LIMIT and close the session.
         if p in (1, 3, 4, 5):
@@ -190,7 +202,22 @@ def run_server(identifier, name, generation):
     w = AndroidPairingWindow(state_dir / "pairing-window.json", identifier, sg); clients = AndroidPairedClients(state_dir / "paired-clients.json"); state = AndroidCompanionState(); trace(f"STATE • {name} • PIN {PIN} • paired clients {clients.count()}")
     loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop); _LOOP = loop
     def factory(): return AndroidCompanionService(state, name=name, identifier=identifier, private_key=private_key, server_generation=sg, pairing_window=w, paired_clients=clients)
-    server = loop.run_until_complete(loop.create_server(factory, "0.0.0.0", 0)); _SERVER = server; port = int(server.sockets[0].getsockname()[1]); Bridge.onServerReady(port); trace(f"{name} READY • port {port}")
+    # Reuse the port across restarts. iOS caches the SRV record it resolved from mDNS, so a
+    # fresh ephemeral port every time the service is recreated leaves the phone dialling a
+    # dead port - the "pick the TV several times before it connects" symptom.
+    port_file = state_dir / "server-port.json"
+    server = None
+    try: wanted = int(json.load(open(port_file, "r", encoding="utf-8"))["port"])
+    except Exception: wanted = 0
+    if wanted:
+        try: server = loop.run_until_complete(loop.create_server(factory, "0.0.0.0", wanted))
+        except OSError as e: trace(f"PORT • {wanted} unavailable ({type(e).__name__}); taking a new one")
+    if server is None: server = loop.run_until_complete(loop.create_server(factory, "0.0.0.0", 0))
+    _SERVER = server; port = int(server.sockets[0].getsockname()[1])
+    if port != wanted:
+        try: _atomic_json(port_file, {"port": port})
+        except Exception as e: trace(f"PORT • could not persist {port} • {type(e).__name__}: {e}")
+    Bridge.onServerReady(port); trace(f"{name} READY • port {port}{' (reused)' if port == wanted else ''}")
     try: loop.run_forever()
     finally: server.close(); loop.run_until_complete(server.wait_closed()); loop.close(); _SERVER = None; _LOOP = None
 

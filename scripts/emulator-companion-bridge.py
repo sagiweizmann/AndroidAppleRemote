@@ -29,7 +29,7 @@ import subprocess
 import sys
 
 SERVICE_TYPE = "_companion-link._tcp"
-POLL_SECONDS = 3
+POLL_SECONDS = 1   # keep the stale-forward window after an app restart short
 
 
 def host_ip() -> str:
