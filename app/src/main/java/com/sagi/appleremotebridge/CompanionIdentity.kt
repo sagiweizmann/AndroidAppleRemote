@@ -20,8 +20,11 @@ class CompanionIdentity(private val context: Context) {
     val generation: Long
         get() = prefs.getLong("generation", 1L)
 
-    fun rotate(): String {
-        val name = newName()
+    fun rotate(): String = rotateTo(newName())
+
+    fun rotateTo(requestedName: String): String {
+        val clean = requestedName.trim().replace(Regex("\\s+"), " ").take(48)
+        val name = if (clean.isBlank()) newName() else clean
         prefs.edit()
             .putString("identifier", UUID.randomUUID().toString())
             .putString("device_name", name)
